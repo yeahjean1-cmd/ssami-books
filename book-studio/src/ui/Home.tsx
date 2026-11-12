@@ -226,7 +226,7 @@ function Wizard({ onClose, imported }: { onClose: () => void; imported?: Importe
                   <button key={t.id} className={`preset tpl${f.templateId === t.id ? ' on' : ''}`} data-template={t.id} onClick={() => up({ templateId: t.id })}>
                     <strong>{t.name}</strong>
                     <span>{t.hint}</span>
-                    <small>본문 {t.styles.body.fontSize}pt · 행간 {t.styles.body.lineHeight}배 · {t.styles.body.fontFamily === 'Pretendard' ? '고딕' : '명조'}</small>
+                    <small>본문 {t.styles.body.fontSize}pt · 행간 {t.styles.body.lineHeight}배 · {/Gothic|Pretendard/.test(t.styles.body.fontFamily) ? '고딕' : '명조'}</small>
                   </button>
                 ))}
               </div>
@@ -302,7 +302,7 @@ export function Home() {
         <div className="projects">
           {list?.map((s) => (
             <div key={s.id} className="project-card">
-              <button className="cover" onClick={() => open(s.id)} style={{ aspectRatio: `${s.width} / ${s.height}` }}>
+              <button className="cover" onClick={() => open(s.id)} style={{ aspectRatio: `${s.width} / ${s.height}`, background: s.coverBg, color: s.coverInk }}>
                 <strong>{s.title}</strong>
                 {s.author && <span>{s.author}</span>}
               </button>

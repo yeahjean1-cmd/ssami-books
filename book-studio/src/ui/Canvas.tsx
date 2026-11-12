@@ -1,8 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { derivedContent } from '../engine/flow';
 import { resolveText } from '../engine/render';
 import { PX_PER_MM } from '../engine/units';
-import { isRightHand } from '../model/factory';
+import { contentRect, isRightHand } from '../model/factory';
 import type { PageElement, Project, Rect, TextElement } from '../model/types';
 import { checkpoint, openManuscript, patchElements, useStore } from '../store/store';
 import { bleedOf } from '../model/cover';
@@ -102,6 +102,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
   const active = cover || pageIndex === currentPage;
   const at = cover ? {} : { currentPage: pageIndex };
   const drag = useRef<Drag | null>(null);
+  const [guides, setGuides] = useState<{ x?: number; y?: number }>({});
   useFontsVersion();
 
   const begin = (e: React.PointerEvent, el: PageElement, mode: Drag['mode']) => {
@@ -131,8 +132,29 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
       d.moved = true;
       checkpoint();
     }
-    const dx = dxPx / scale;
-    const dy = dyPx / scale;
+    let dx = dxPx / scale;
+    let dy = dyPx / scale;
+    if (d.mode === 'move' && !e.altKey) {
+      // 쪽 가운데·가장자리·여백선에 가까워지면 달라붙고 안내선을 보여 준다 (Alt를 누르면 끔)
+      const rs = Object.values(d.orig);
+      const l = Math.min(...rs.map((r) => r.x)) + dx;
+      const r = Math.max(...rs.map((q) => q.x + q.w)) + dx;
+      const t = Math.min(...rs.map((q) => q.y)) + dy;
+      const b = Math.max(...rs.map((q) => q.y + q.h)) + dy;
+      const c = contentRect(project, pageIndex);
+      const { width: W, height: H } = project.format;
+      const tol = 5 / scale;
+      const snap = (vals: number[], targets: number[]) => {
+        let best: { d: number; t: number } | null = null;
+        for (const v of vals) for (const g of targets) if (Math.abs(g - v) < tol && (!best || Math.abs(g - v) < Math.abs(best.d))) best = { d: g - v, t: g };
+        return best as { d: number; t: number } | null;
+      };
+      const sx = snap([l, (l + r) / 2, r], [0, W / 2, W, c.x, c.x + c.w / 2, c.x + c.w]);
+      const sy = snap([t, (t + b) / 2, b], [0, H / 2, H, c.y, c.y + c.h / 2, c.y + c.h]);
+      if (sx) dx += sx.d;
+      if (sy) dy += sy.d;
+      setGuides({ x: sx?.t, y: sy?.t });
+    }
     const patches: Record<string, Partial<PageElement>> = {};
     for (const [id, r] of Object.entries(d.orig)) {
       patches[id] = d.mode === 'move' ? { x: r.x + dx, y: r.y + dy } : resized(r, d.mode, dx, dy);
@@ -142,6 +164,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
 
   const end = () => {
     drag.current = null;
+    setGuides({});
   };
 
   const hs = 7 / scale;
@@ -155,6 +178,8 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
     >
       <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id} bleed={bleed} background={background} grid>
         {overlay}
+        {guides.x !== undefined && <line className="snap-guide" x1={guides.x} x2={guides.x} y1={-bleed} y2={project.format.height + bleed} strokeWidth={1 / scale} />}
+        {guides.y !== undefined && <line className="snap-guide" y1={guides.y} y2={guides.y} x1={-bleed} x2={project.format.width + bleed} strokeWidth={1 / scale} />}
         {derivedContent(project, pageIndex).texts.filter((t) => t.blockId && page.kind === 'flow').map((t) => (
           <rect
             key={t.key} data-block={t.blockId} className="block-hit"

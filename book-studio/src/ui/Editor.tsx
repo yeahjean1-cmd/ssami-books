@@ -117,6 +117,7 @@ export function Editor({ project }: { project: Project }) {
   const issues = usePreflight(project);
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.filter((i) => i.level === 'warn').length;
+  const [menu, setMenu] = useState(false);
   const canPlace = s.centerView === 'pages' || s.centerView === 'master' || (s.centerView === 'cover' && !!project.cover);
 
   const exportProjectFile = () => {
@@ -178,26 +179,33 @@ export function Editor({ project }: { project: Project }) {
           onChange={(e) => mutate((p) => ({ ...p, meta: { ...p.meta, title: e.target.value } }), { coalesce: 'meta:title' })}
         />
         <div className="group">
-          <button className="btn ghost" id="undo" disabled={!s.past.length} onClick={undo} title="실행 취소 (Ctrl+Z)">실행 취소</button>
-          <button className="btn ghost" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)">다시 실행</button>
+          <button className="btn ghost icon" id="undo" disabled={!s.past.length} onClick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
+          <button className="btn ghost icon" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
         </div>
-        <div className="group">
+        <div className="spacer" />
+        {/* 작업 단계: 책을 만드는 순서대로 놓는다 */}
+        <nav className="main-tabs" id="view-switch" aria-label="작업 단계">
+          {project.story && <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고<small>글 쓰기</small></button>}
+          <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null, selection: [], editingId: null })}>페이지<small>본문 디자인</small></button>
+          <button className={s.centerView === 'master' ? 'on' : ''} id="view-master" onClick={() => useStore.setState({ centerView: 'master', selection: [], editingId: null, selectedBlock: null, focus: null })}>공통<small>모든 쪽 배경</small></button>
+          <button className={s.centerView === 'cover' ? 'on' : ''} id="view-cover" onClick={() => useStore.setState({ centerView: 'cover', selection: [], editingId: null, selectedBlock: null, focus: null })}>표지<small>앞·등·뒤</small></button>
+        </nav>
+        <div className="spacer" />
+        <div className="group insert" aria-label="넣기">
           <button className="btn" id="add-text" disabled={!canPlace} onClick={addTextBox}>글 상자</button>
           <button className="btn" id="add-image" disabled={!canPlace} onClick={insertImage}>이미지</button>
           <button className="btn" id="add-rect" disabled={!canPlace} onClick={addRect}>도형</button>
         </div>
-        {(
-          <div className="segmented small" id="view-switch">
-            <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null, selection: [], editingId: null })}>페이지</button>
-            {project.story && <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고</button>}
-            <button className={s.centerView === 'cover' ? 'on' : ''} id="view-cover" onClick={() => useStore.setState({ centerView: 'cover', selection: [], editingId: null, selectedBlock: null, focus: null })}>표지</button>
-            <button className={s.centerView === 'master' ? 'on' : ''} id="view-master" title="모든 쪽에 공통으로 깔리는 배경·장식" onClick={() => useStore.setState({ centerView: 'master', selection: [], editingId: null, selectedBlock: null, focus: null })}>공통</button>
-          </div>
-        )}
         {project.cover && <button className="btn ghost" id="open-preview" onClick={() => setDialog('preview')}>책 미리보기</button>}
-        <div className="spacer" />
-        <button className="btn ghost" id="open-help" onClick={() => setDialog('help')}>도움말</button>
-        <button className="btn ghost" id="save-file" onClick={exportProjectFile} title="편집 가능한 프로젝트 파일(.bookstudio)로 내보내요">프로젝트 파일로 저장</button>
+        <div className="more">
+          <button className="btn ghost icon" id="more" aria-label="더 보기" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
+          {menu && (
+            <div className="menu" onClick={() => setMenu(false)}>
+              <button id="save-file" onClick={exportProjectFile}>프로젝트 파일로 저장<small>백업하거나 다른 기기로 옮길 때</small></button>
+              <button id="open-help" onClick={() => setDialog('help')}>도움말<small>사용 안내와 진단 정보</small></button>
+            </div>
+          )}
+        </div>
         <button className="btn primary" id="export-pdf" onClick={() => setDialog('export')}>PDF 내보내기</button>
       </header>
 

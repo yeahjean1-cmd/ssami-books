@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { derive } from '../engine/flow';
+import { parseMarkup } from '../engine/layout';
 import { makeBlock } from '../model/factory';
 import { STYLE_LABEL, STYLE_NAMES } from '../model/templates';
 import type { Block, Project, StyleName } from '../model/types';
@@ -18,6 +19,55 @@ export function wrapSelection(block: Block, t: HTMLTextAreaElement, open: string
   const { selectionStart: a, selectionEnd: b, value } = t;
   patchBlock(block.id, { text: value.slice(0, a) + open + value.slice(a, b) + close + value.slice(b) });
   useStore.setState({ focus: { id: block.id, caret: (a === b ? a : b + close.length) + open.length } });
+}
+
+/** 표시(**·*·__·~~·[^])를 해석해 서식이 적용된 모습으로 보여 준다. */
+export function renderMarkup(text: string) {
+  const p = parseMarkup(text);
+  const out: React.ReactNode[] = [];
+  let buf = '';
+  let flag = 0;
+  const push = () => {
+    if (!buf) return;
+    const style: React.CSSProperties = {
+      fontWeight: flag & 1 ? 700 : undefined, fontStyle: flag & 2 ? 'italic' : undefined,
+      textDecoration: [flag & 8 ? 'underline' : '', flag & 16 ? 'line-through' : ''].join(' ').trim() || undefined,
+    };
+    out.push(flag & 1 ? <b key={out.length} style={style}>{buf}</b> : flag ? <span key={out.length} style={style}>{buf}</span> : buf);
+    buf = '';
+  };
+  p.chars.forEach((ch, i) => {
+    const f = p.flags[i] ?? 0;
+    if (p.fn[i] !== undefined) {
+      push();
+      out.push(<sup key={out.length} className="fn-chip" title={p.notes[p.fn[i]!]}>각주</sup>);
+      return;
+    }
+    if (f !== flag) push();
+    flag = f;
+    buf += ch;
+  });
+  push();
+  return out;
+}
+
+const FORMATS: [string, string, string, string][] = [['굵게', '**', '**', 'Ctrl+B'], ['기울임', '*', '*', 'Ctrl+I'], ['밑줄', '__', '__', ''], ['취소선', '~~', '~~', ''], ['각주', '[^', ']', '']];
+
+/** 글을 쓰는 문단 위에 뜨는 서식 버튼 */
+function FormatBar({ block }: { block: Block }) {
+  return (
+    <div className="format-bar" id="format-bar">
+      {FORMATS.map(([name, open, close, key]) => (
+        <button key={name} data-format={name} title={key ? `${name} (${key})` : name}
+          onMouseDown={(e) => {
+            e.preventDefault(); // 글 상자의 선택 영역을 유지한다
+            const t = document.querySelector<HTMLTextAreaElement>('textarea.ms-text');
+            if (t) wrapSelection(block, t, open, close);
+          }}>{name}</button>
+      ))}
+      <span>고른 글에 적용돼요. 쓰는 동안에는 기호로 보이고, 다른 문단으로 옮기면 서식으로 보여요.</span>
+    </div>
+  );
 }
 
 function BlockEditor({ block, caret }: { block: Block; caret: number }) {
@@ -87,7 +137,7 @@ export function Manuscript({ project }: { project: Project }) {
       <div className="ms-sheet">
         <p className="hint ms-help">
           Enter로 문단을 나누고, 문단 맨 앞에서 Backspace로 앞 문단과 합쳐요. 왼쪽에서 문단 종류를 고르면 책 디자인이 자동으로 적용돼요.<br />
-          글자 서식: <b>**굵게**</b>(Ctrl+B) · <i>*기울임*</i>(Ctrl+I) · <u>__밑줄__</u> · <s>~~취소선~~</s> · 각주는 <code>[^각주 내용]</code>을 넣은 자리에 번호가 붙고, 내용은 그 쪽 아래에 놓여요.
+          문단을 누르면 굵게·기울임·밑줄·취소선·각주 버튼이 나타나요. 각주는 번호가 달린 쪽 아래에 자동으로 놓여요.
         </p>
         {story.map((b) => {
           const active = focus?.id === b.id;
@@ -108,14 +158,14 @@ export function Manuscript({ project }: { project: Project }) {
                 {b.assetId ? (
                   project.assets[b.assetId] && <img src={project.assets[b.assetId].dataUrl} alt={project.assets[b.assetId].name} />
                 ) : active ? (
-                  <BlockEditor block={b} caret={focus!.caret} />
+                  <><FormatBar block={b} /><BlockEditor block={b} caret={focus!.caret} /></>
                 ) : (
                   <div
                     className="ms-text" tabIndex={0}
                     onClick={() => useStore.setState({ focus: { id: b.id, caret: b.text.length } })}
                     onFocus={() => useStore.setState({ focus: { id: b.id, caret: b.text.length } })}
                   >
-                    {b.text || <span className="ms-empty">빈 문단</span>}
+                    {b.text ? renderMarkup(b.text) : <span className="ms-empty">빈 문단</span>}
                   </div>
                 )}
               </div>
@@ -123,11 +173,6 @@ export function Manuscript({ project }: { project: Project }) {
                 {page && <button className="btn ghost small" onClick={() => goToBlock(b.id)} title="이 문단이 놓인 쪽 보기">{page}쪽</button>}
                 {(active || b.assetId) && (
                   <>
-                    {active && <button className="btn ghost small" data-act="footnote" title="커서 자리에 각주를 넣어요" onMouseDown={(e) => {
-                      e.preventDefault();
-                      const t = document.querySelector<HTMLTextAreaElement>('textarea.ms-text');
-                      if (t) wrapSelection(b, t, '[^', ']');
-                    }}>＋각주</button>}
                     <button className="btn ghost small" onClick={() => addImage(b.id)} title="이 문단 뒤에 이미지를 넣어요">＋이미지</button>
                     <button className="btn ghost small" onClick={() => removeBlock(b.id)} aria-label="문단 삭제">삭제</button>
                   </>

@@ -29,6 +29,8 @@ export interface FontFamilyInfo {
 const BUILTIN = [
   { family: 'Nanum Myeongjo', label: '나눔명조', regular: 'NanumMyeongjo-Regular.ttf', bold: 'NanumMyeongjo-Bold.ttf' },
   { family: 'Pretendard', label: '프리텐다드', regular: 'Pretendard-Regular.ttf', bold: 'Pretendard-Bold.ttf' },
+  { family: 'Gowun Batang', label: '고운바탕', regular: 'GowunBatang-Regular.ttf', bold: 'GowunBatang-Bold.ttf' },
+  { family: 'Nanum Gothic', label: '나눔고딕', regular: 'NanumGothic-Regular.ttf', bold: 'NanumGothic-Bold.ttf' },
 ];
 
 const registry = new Map<string, LoadedFont>();

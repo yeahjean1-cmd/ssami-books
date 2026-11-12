@@ -37,6 +37,9 @@ await page.fill('#w-title', '느리게 걷는 마음');
 await page.fill('#w-author', '김하루');
 await finishWizard();
 assert(await pageCount() === 2, '새 책은 속표지 + 본문 1쪽');
+assert(await page.locator('#right-panel.simple').count() === 1 && !(await page.isVisible('#baseline-grid')), '처음에는 ‘간단히’ 모드: 세부 설정은 숨김');
+await page.click('#mode-expert');
+assert(await page.isVisible('#baseline-grid'), '‘자세히’ 모드에서 세부 설정 표시');
 await page.click('#view-manuscript');
 await page.locator('.ms-row .ms-text').nth(1).click();
 await page.locator('textarea.ms-text').fill(para.repeat(30));
@@ -73,7 +76,9 @@ await page.waitForSelector('#image-dpi');
 const hit = page.locator('.page-stage.active .el-hit').nth(1);
 const b0 = await hit.boundingBox();
 await page.mouse.move(b0.x + b0.width / 2, b0.y + b0.height / 2);
+await page.keyboard.down('Alt'); // 달라붙기 끄고 정확히 옮긴다
 await page.mouse.down(); await page.mouse.move(b0.x + b0.width / 2 + 30, b0.y + b0.height / 2 - 40, { steps: 5 }); await page.mouse.up();
+await page.keyboard.up('Alt');
 const b1 = await hit.boundingBox();
 assert(Math.abs(b1.x - b0.x - 30) < 1.5 && Math.abs(b1.y - b0.y + 40) < 1.5, '끌어서 요소 이동');
 await page.click('#undo');
@@ -171,7 +176,7 @@ for (let i = 0; i < docxPages && !foundImage; i++) {
 assert(foundImage, '문서 안의 이미지가 본문 흐름에 들어감');
 await page.screenshot({ path: f('5-docx.png') });
 await page.click('#view-manuscript');
-assert((await page.textContent('#manuscript')).includes('**천천히 걷는 사람**'), 'Word의 굵은 글자를 굵게 표시로 가져옴');
+assert((await page.locator('#manuscript b').allTextContents()).includes('천천히 걷는 사람') && !(await page.textContent('#manuscript .ms-sheet .ms-row')).includes('**'), 'Word의 굵은 글자를 가져오고, 원고 보기에서 기호 없이 굵게 보임');
 await page.click('#view-pages');
 await page.click('#go-home');
 
@@ -290,6 +295,7 @@ const icc = fs.readFileSync('tests/fixtures/CGATS001Compat-v2-micro.icc');
 fs.writeFileSync(f('not-output.icc'), icc);
 const prtr = Buffer.from(icc); prtr.write('prtr', 12, 'latin1');
 fs.writeFileSync(f('printer.icc'), prtr);
+await page.click('#tab-print');
 await pick('#load-profile', f('not-output.icc'));
 await page.waitForSelector('.toast.error');
 assert((await page.textContent('#profile-name')) === '없음', '출력 장치용이 아닌 프로파일은 거부');
@@ -330,6 +336,7 @@ assert(marks.bold === '700' && marks.italic.includes('skewX') && marks.note && !
 await page.screenshot({ path: f('11-footnote.png') });
 
 await page.click('#canvas', { position: { x: 5, y: 5 } });
+await page.click('#tab-design');
 await page.check('#baseline-grid');
 assert(await page.locator('.page-stage.active #baseline-grid').count() === 1, '기준선 격자 켜기');
 await page.check('#pn-restart');
@@ -396,7 +403,10 @@ assert(await page.locator('.page-stage.active svg > ellipse').count() === 0, '�
 await page.click('#canvas', { position: { x: 5, y: 5 } });
 await page.check('#notes-book');
 await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === '저장됨');
+await page.click('#tab-doc');
+await page.waitForSelector('#versions > div'); // 목록은 탭을 연 뒤 불러온다
 assert(await page.locator('#versions > div').count() >= 1, '책을 열 때 남긴 복원 지점이 ‘이전 버전’에 보임');
+await page.click('#more');
 await page.click('#open-help');
 assert((await page.textContent('#help')).includes('인쇄소에 넘기기'), '사용 안내');
 await page.click('#help .btn.primary');

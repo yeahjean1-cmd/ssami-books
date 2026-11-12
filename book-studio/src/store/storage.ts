@@ -10,6 +10,9 @@ export interface ProjectSummary {
   height: number;
   presetId: string;
   pageCount: number;
+  /** 표지가 있으면 목록에서 표지 색으로 보여 준다 */
+  coverBg?: string;
+  coverInk?: string;
 }
 
 export interface StoredFont {
@@ -52,6 +55,8 @@ export function summarize(p: Project): ProjectSummary {
   return {
     id: p.id, title: p.meta.title, author: p.meta.author, updatedAt: p.updatedAt,
     width: p.format.width, height: p.format.height, presetId: p.format.presetId, pageCount: p.pages.length,
+    coverBg: p.cover?.background,
+    coverInk: p.cover?.elements.find((e) => e.type === 'text' && !e.spine)?.type === 'text' ? (p.cover.elements.find((e) => e.type === 'text' && !e.spine) as any).style.color : undefined,
   };
 }
 

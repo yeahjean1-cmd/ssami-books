@@ -28,6 +28,8 @@ interface State {
   saveState: SaveState;
   /** 내 템플릿·인쇄소 프로파일 목록이 바뀔 때마다 올라간다 */
   libraryVersion: number;
+  /** 자세히 모드: 세부 조판·인쇄 설정까지 모두 보여 준다 */
+  expert: boolean;
   toast: { text: string; kind: 'info' | 'error' } | null;
 }
 
@@ -51,6 +53,7 @@ export const useStore = create<State>(() => ({
   showGuides: true,
   saveState: 'saved',
   libraryVersion: 0,
+  expert: (() => { try { return localStorage.getItem('bs.expert') === '1'; } catch { return false; } })(),
   toast: null,
 }));
 
@@ -535,3 +538,12 @@ export function applyShopProfile(id: string) {
   notify(`‘${sp.name}’ 설정을 적용했어요.`);
 }
 export const deleteShopProfile = (id: string) => writeList('bs.shops', shopProfiles().filter((x) => x.id !== id));
+
+export function setExpert(expert: boolean) {
+  try {
+    localStorage.setItem('bs.expert', expert ? '1' : '0');
+  } catch {
+    /* 저장하지 못해도 이번 실행에서는 적용된다 */
+  }
+  set({ expert });
+}

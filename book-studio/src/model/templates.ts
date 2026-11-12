@@ -35,12 +35,12 @@ export const TEMPLATES: InteriorTemplate[] = [
     master: master(),
   },
   {
-    id: 'novel', name: '소설형', hint: '촘촘한 본문, 가운데 장 제목',
+    id: 'novel', name: '소설형', hint: '고운바탕, 촘촘한 본문, 가운데 장 제목',
     styles: {
-      chapter: heading({ fontSize: 15, align: 'center', spaceBefore: 45, spaceAfter: 22, breakBefore: true }),
-      section: heading({ fontSize: 10.5, align: 'center', spaceBefore: 7, spaceAfter: 4 }),
-      body: st({ fontSize: 9.8, lineHeight: 1.7 }),
-      quote: st({ fontSize: 9.3, inset: 6, indent: 0, spaceBefore: 3, spaceAfter: 3 }),
+      chapter: heading({ fontFamily: 'Gowun Batang', fontSize: 15, align: 'center', spaceBefore: 45, spaceAfter: 22, breakBefore: true }),
+      section: heading({ fontFamily: 'Gowun Batang', fontSize: 10.5, align: 'center', spaceBefore: 7, spaceAfter: 4 }),
+      body: st({ fontFamily: 'Gowun Batang', fontSize: 9.8, lineHeight: 1.7 }),
+      quote: st({ fontFamily: 'Gowun Batang', fontSize: 9.3, inset: 6, indent: 0, spaceBefore: 3, spaceAfter: 3 }),
     },
     master: master({ pageNumber: { show: true, position: 'bottom-outside', format: 'arabic', firstPage: 1, startAt: 1 } }),
   },
@@ -55,12 +55,12 @@ export const TEMPLATES: InteriorTemplate[] = [
     master: master({ header: { show: false, left: 'none', right: 'none' } }),
   },
   {
-    id: 'practical', name: '실용서형', hint: '고딕 제목, 문단 사이 간격',
+    id: 'practical', name: '실용서형', hint: '나눔고딕 본문, 문단 사이 간격',
     styles: {
       chapter: heading({ fontFamily: 'Pretendard', fontSize: 19, spaceBefore: 22, spaceAfter: 14, breakBefore: true }),
       section: heading({ fontFamily: 'Pretendard', fontSize: 12, spaceBefore: 9, spaceAfter: 3 }),
-      body: st({ fontFamily: 'Pretendard', fontSize: 9.5, lineHeight: 1.7, indent: 0, spaceAfter: 2.5 }),
-      quote: st({ fontFamily: 'Pretendard', fontSize: 9, inset: 6, indent: 0, spaceBefore: 3, spaceAfter: 4, color: '#4a4640' }),
+      body: st({ fontFamily: 'Nanum Gothic', fontSize: 9.5, lineHeight: 1.7, indent: 0, spaceAfter: 2.5 }),
+      quote: st({ fontFamily: 'Nanum Gothic', fontSize: 9, inset: 6, indent: 0, spaceBefore: 3, spaceAfter: 4, color: '#4a4640' }),
     },
     master: master({ pageNumber: { show: true, position: 'bottom-outside', format: 'arabic', firstPage: 1, startAt: 1 } }),
   },

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { FontError, inspectFontFile, listFamilies, registerFontData } from '../engine/fonts';
 import { inspectIcc } from '../engine/pdf';
 import { effectiveDpi, resolveText } from '../engine/render';
@@ -8,7 +9,7 @@ import { STYLE_LABEL, STYLE_NAMES, TEMPLATES } from '../model/templates';
 import type { BindingType, Block, ImageElement, RectElement, Master, PageElement, ParaStyle, Project, RunningText, StyleName, TextElement, TextStyle } from '../model/types';
 import { saveFont } from '../store/storage';
 import {
-  applyShopProfile, applyTemplate, applyUserTemplate, deleteShopProfile, deleteUserTemplate, saveShopProfile, saveUserTemplate, shopProfiles, userTemplates,
+  setExpert, applyShopProfile, applyTemplate, applyUserTemplate, deleteShopProfile, deleteUserTemplate, saveShopProfile, saveUserTemplate, shopProfiles, userTemplates,
   createCover, mutate, notify, patchCover, patchPrint, surfaceOf, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
   reorderSelection, useStore,
 } from '../store/store';
@@ -85,7 +86,7 @@ function StyleControls({ s, set, flow }: { s: TextStyle; set: (patch: Partial<Te
           <Segmented label="굵기" value={s.bold ? 'b' : 'r'} onChange={(v) => set({ bold: v === 'b' }, 'bold')}
             options={[{ value: 'r', label: '보통' }, { value: 'b', label: '굵게' }]} />
           <NumField label="행간" unit="배" value={s.lineHeight} min={0.8} max={4} step={0.05} onChange={(lineHeight) => set({ lineHeight }, 'lh')} />
-          <NumField label="자간" unit="‰" value={s.letterSpacing} min={-200} max={1000} step={5} onChange={(letterSpacing) => set({ letterSpacing }, 'ls')} />
+          <div className="adv"><NumField label="자간" unit="‰" value={s.letterSpacing} min={-200} max={1000} step={5} onChange={(letterSpacing) => set({ letterSpacing }, 'ls')} /></div>
         </div>
         {s.bold && current && !current.hasBold && (
           <p className="hint">이 서체는 굵은 글꼴 파일이 없어 보통 굵기로 표시돼요.</p>
@@ -106,8 +107,8 @@ function StyleControls({ s, set, flow }: { s: TextStyle; set: (patch: Partial<Te
           <NumField label="첫 줄 들여쓰기" unit="mm" value={s.indent} min={0} max={50} step={0.5} onChange={(indent) => set({ indent }, 'indent')} />
           {!flow && <NumField label="문단 간격" unit="mm" value={s.paraSpacing} min={0} max={50} step={0.5} onChange={(paraSpacing) => set({ paraSpacing }, 'ps')} />}
         </div>
-        <Segmented label="줄바꿈" value={s.wordBreak} onChange={(wordBreak) => set({ wordBreak }, 'wb')}
-          options={[{ value: 'char', label: '글자 단위' }, { value: 'word', label: '낱말 단위' }]} />
+        <div className="adv"><Segmented label="줄바꿈" value={s.wordBreak} onChange={(wordBreak) => set({ wordBreak }, 'wb')}
+          options={[{ value: 'char', label: '글자 단위' }, { value: 'word', label: '낱말 단위' }]} /></div>
         {!flow && <p className="hint">책 본문은 보통 ‘글자 단위’와 ‘양쪽’ 정렬을 써요. 문장부호가 줄 처음에 오지 않도록 자동으로 처리돼요.</p>}
       </section>
     </>
@@ -165,7 +166,7 @@ function BlockProps({ block, project }: { block: Block; project: Project }) {
         아래는 ‘{STYLE_LABEL[block.style]}’ 스타일이에요. 고치면 책 전체의 {STYLE_LABEL[block.style]} {count}개 문단에 함께 적용돼요.
       </div>
       <StyleControls s={style} set={set} flow />
-      <section>
+      <section className="adv">
         <h3>간격과 쪽 나눔</h3>
         <div className="grid2">
           <NumField label="문단 앞" unit="mm" value={style.spaceBefore} min={0} max={150} step={0.5} onChange={(spaceBefore) => set({ spaceBefore }, 'sb')} />
@@ -222,12 +223,12 @@ function BookDesign({ project }: { project: Project }) {
           </div>
         )}
         <NameSave id="tpl-name" placeholder="지금 디자인의 이름" label="내 템플릿으로 저장" onSave={saveUserTemplate} />
-        <label className="check">
+        <label className="check adv">
           <input id="baseline-grid" type="checkbox" checked={!!project.baselineGrid} onChange={(e) => mutate((p) => ({ ...p, baselineGrid: e.target.checked }))} />
           본문 줄을 기준선 격자에 맞추기
         </label>
-        <p className="hint">격자를 켜면 제목이나 인용문 뒤에도 본문 줄이 같은 높이에 놓여, 펼친 양쪽의 줄이 나란해져요.</p>
-        <label className="check">
+        <p className="hint adv">격자를 켜면 제목이나 인용문 뒤에도 본문 줄이 같은 높이에 놓여, 펼친 양쪽의 줄이 나란해져요.</p>
+        <label className="check adv">
           <input id="notes-book" type="checkbox" checked={project.footnoteNumbering === 'book'} onChange={(e) => mutate((p) => ({ ...p, footnoteNumbering: e.target.checked ? 'book' : undefined }))} />
           각주 번호를 책 전체에 이어서 매기기
         </label>
@@ -248,7 +249,7 @@ function BookDesign({ project }: { project: Project }) {
               <NumField id="pn-first" label="번호를 시작할 쪽" unit="쪽" value={m.pageNumber.firstPage} min={1} max={project.pages.length} onChange={(v) => pn({ firstPage: Math.round(v) }, 'first')} />
               <NumField label="시작 번호" value={m.pageNumber.startAt} min={1} max={9999} onChange={(v) => pn({ startAt: Math.round(v) }, 'start')} />
             </div>
-            <label className="check">
+            <label className="check adv">
               <input id="pn-restart" type="checkbox" checked={!!m.pageNumber.restartPerChapter} onChange={(e) => pn({ restartPerChapter: e.target.checked }, 'restart')} />
               장마다 번호 다시 시작
             </label>
@@ -387,7 +388,7 @@ function PrintSettings({ project }: { project: Project }) {
         </div>
       </div>
       <p className="hint">인쇄소가 알려 준 CMYK 프로파일(예: Japan Color 2001 Coated, FOGRA39)을 불러오면 PDF/X-4로 내보낼 수 있어요. 프로젝트에 함께 저장돼요.</p>
-      <div className="field">
+      <div className="field adv">
         <span>인쇄소별 설정 (도련·제본·프로파일·종이)</span>
         {shops.length > 0 && (
           <div className="saved-list" id="shop-profiles">
@@ -511,8 +512,6 @@ function DocumentProps({ project }: { project: Project }) {
         </label>
         <p className="hint">여백을 바꾸면 본문은 자동으로 다시 조판돼요. 직접 놓은 글 상자와 이미지는 옮겨지지 않아요.</p>
       </section>
-      <PrintSettings project={project} />
-      <Versions project={project} />
     </>
   );
 }
@@ -531,8 +530,16 @@ export function RightPanel({ project }: { project: Project }) {
   // 원고 보기에서는 글을 쓰고 있는 문단의 속성을 보여 준다
   const blockId = centerView === 'manuscript' ? focus?.id : selectedBlock;
   const block = project.story?.find((b) => b.id === blockId && !b.assetId);
+  const expert = useStore((s) => s.expert);
+  const hasDesign = !!(project.story && project.master);
+  const [tab0, setTab] = useState<'design' | 'doc' | 'print'>('design');
+  const tab = tab0 === 'design' && !hasDesign ? 'doc' : tab0;
   return (
-    <aside className="panel right" id="right-panel">
+    <aside className={`panel right${expert ? '' : ' simple'}`} id="right-panel">
+      <div className="mode-switch" title="‘간단히’는 꼭 필요한 설정만, ‘자세히’는 세부 조판·인쇄 설정까지 보여 줘요">
+        <button id="mode-simple" className={expert ? '' : 'on'} onClick={() => setExpert(false)}>간단히</button>
+        <button id="mode-expert" className={expert ? 'on' : ''} onClick={() => setExpert(true)}>자세히</button>
+      </div>
       {selected.length === 1 && selected[0].type === 'rect' && <RectProps el={selected[0]} pageId={page.id} />}
       {selected.length === 0 && onCover && project.cover && <CoverProps project={project} />}
       {selected.length === 0 && onCover && !project.cover && <PrintSettings project={project} />}
@@ -542,8 +549,14 @@ export function RightPanel({ project }: { project: Project }) {
       {selected.length === 0 && !onCover && centerView0 !== 'master' && block && <BlockProps block={block} project={project} />}
       {selected.length === 0 && !onCover && centerView0 !== 'master' && !block && (
         <>
-          {project.story && project.master && <BookDesign project={project} />}
-          <DocumentProps project={project} />
+          <div className="panel-tabs" role="tablist">
+            {hasDesign && <button id="tab-design" className={tab === 'design' ? 'on' : ''} onClick={() => setTab('design')}>디자인</button>}
+            <button id="tab-doc" className={tab === 'doc' ? 'on' : ''} onClick={() => setTab('doc')}>문서</button>
+            <button id="tab-print" className={tab === 'print' ? 'on' : ''} onClick={() => setTab('print')}>인쇄</button>
+          </div>
+          {tab === 'design' && hasDesign && <BookDesign project={project} />}
+          {tab === 'doc' && <><DocumentProps project={project} /><Versions project={project} /></>}
+          {tab === 'print' && <PrintSettings project={project} />}
         </>
       )}
       {selected.length === 1 && selected[0].type === 'text' && <TextProps el={selected[0]} pageId={page.id} />}
