@@ -1,7 +1,7 @@
 // PDF 출력. 화면을 캡처하지 않고 문서 모델과 조판 결과를 PDF 연산자로 직접 그린다.
 // 화면용(완성 크기·RGB)과 인쇄용(도련·재단선·CMYK·PDF/X-4)을 같은 그리기 경로로 만든다.
 import {
-  PDFDocument, PDFFont, PDFHexString, PDFImage, PDFName, PDFPage, PDFString, clip, cmyk, concatTransformationMatrix, endPath,
+  PDFDocument, PDFFont, PDFHexString, PDFImage, PDFName, PDFPage, PDFString, clip, cmyk, concatTransformationMatrix, degrees, endPath,
   popGraphicsState, pushGraphicsState, rectangle, rgb, setCharacterSpacing, type Color,
 } from 'pdf-lib';
 import * as fontkitNs from '@pdf-lib/fontkit';
@@ -9,7 +9,8 @@ import { bleedOf, coverAsProject } from '../model/cover';
 import type { Asset, PageElement, Project } from '../model/types';
 import { derivedContent } from './flow';
 import type { LoadedFont } from './fonts';
-import type { Line } from './layout';
+import { SUP_RISE, SUP_SCALE, type Line } from './layout';
+import { PT_TO_MM } from './units';
 import { imageDrawRect, resolveText } from './render';
 import { subsetFont, type WasmSource } from './subset';
 import { MM_TO_PT, hexToRgb } from './units';
@@ -70,7 +71,7 @@ export function toCmyk(hex: string): [number, number, number, number] {
 const MARK_GAP = 2; // 도련과 재단선 표시 사이 mm
 const MARK_LEN = 5;
 
-interface TextDraw { x: number; y: number; lines: Line[]; font: LoadedFont; size: number; color: string; el?: PageElement }
+interface TextDraw { x: number; y: number; lines: Line[]; font: LoadedFont; fontBold?: LoadedFont; size: number; color: string; el?: PageElement }
 
 export async function exportPdf(project: Project, opts: ExportOptions = {}): Promise<Uint8Array> {
   const { rasterize, hbWasm } = opts;
@@ -95,12 +96,15 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
   const H = src.format.height * k;
   const color = (hex: string): Color => (opts.cmyk ? cmyk(...toCmyk(hex)) : rgb(...hexToRgb(hex)));
 
-  const pageTexts: TextDraw[][] = src.pages.map((page, i) => {
-    const list: TextDraw[] = derivedContent(src, i).texts.map((t) => ({ x: t.x, y: t.y, lines: t.lines, font: t.font, size: t.fontSize, color: t.color }));
-    for (const el of page.elements) {
+  // 쪽마다 그릴 요소: 공통 요소(마스터)를 먼저 깔고 그 위에 쪽 요소를 놓는다. 숨긴 요소는 뺀다.
+  const pageEls: PageElement[][] = src.pages.map((page) =>
+    [...(page.hideMaster ? [] : src.masterElements ?? []), ...page.elements].filter((el) => !el.hidden));
+  const pageTexts: TextDraw[][] = src.pages.map((_, i) => {
+    const list: TextDraw[] = derivedContent(src, i).texts.map((t) => ({ x: t.x, y: t.y, lines: t.lines, font: t.font, fontBold: t.fontBold, size: t.fontSize, color: t.color }));
+    for (const el of pageEls[i]) {
       if (el.type !== 'text') continue;
       const res = resolveText(el);
-      if (res) list.push({ x: el.x, y: el.y, lines: res.layout.lines, font: res.font, size: el.style.fontSize, color: el.style.color, el });
+      if (res) list.push({ x: el.x, y: el.y, lines: res.layout.lines, font: res.font, fontBold: res.fontBold, size: el.style.fontSize, color: el.style.color, el });
     }
     return list;
   });
@@ -109,9 +113,14 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
   const used = new Map<string, { data: Uint8Array; cps: Set<number> }>();
   for (const list of pageTexts) {
     for (const t of list) {
-      let u = used.get(t.font.key);
-      if (!u) used.set(t.font.key, (u = { data: t.font.data, cps: new Set([32]) }));
-      for (const line of t.lines) for (const run of line.runs) for (const ch of run.text) u.cps.add(ch.codePointAt(0)!);
+      for (const line of t.lines) {
+        for (const run of line.runs) {
+          const f = run.b && t.fontBold ? t.fontBold : t.font;
+          let u = used.get(f.key);
+          if (!u) used.set(f.key, (u = { data: f.data, cps: new Set([32]) }));
+          for (const ch of run.text) u.cps.add(ch.codePointAt(0)!);
+        }
+      }
     }
   }
   const fonts = new Map<string, PDFFont>();
@@ -150,7 +159,7 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
     return () => out.pushOperators(popGraphicsState());
   };
 
-  for (const [pageIndex, page] of src.pages.entries()) {
+  for (const pageIndex of src.pages.keys()) {
     const out = doc.addPage([W + pad * 2 * k, H + pad * 2 * k]);
     const o = pad * k;
     const b = bleed * k;
@@ -179,28 +188,26 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
     out.pushOperators(pushGraphicsState(), concatTransformationMatrix(1, 0, 0, 1, o, o), rectangle(-b, -b, W + b * 2, H + b * 2), clip(), endPath());
     if (background) out.drawRectangle({ x: -b, y: -b, width: W + b * 2, height: H + b * 2, color: color(background) });
 
-    for (const im of derivedContent(src, pageIndex).images) {
-      const asset = src.assets[im.assetId];
-      if (!asset) continue;
-      const r = im.rect;
-      out.drawImage(await embedImage(asset), { x: r.x * k, y: H - (r.y + r.h) * k, width: r.w * k, height: r.h * k });
-    }
     const drawText = (t: TextDraw) => {
-      const font = fonts.get(t.font.key)!;
       const done = rotated(out, t.el);
       for (const line of t.lines) {
         for (const run of line.runs) {
+          const font = fonts.get((run.b && t.fontBold ? t.fontBold : t.font).key)!;
+          const rise = run.sup ? SUP_RISE * t.size * PT_TO_MM : 0;
           out.pushOperators(setCharacterSpacing(run.ls * k));
-          out.drawText(run.text, { x: (t.x + run.x) * k, y: H - (t.y + line.baseline) * k, size: t.size, font, color: color(t.color) });
+          out.drawText(run.text, {
+            x: (t.x + run.x) * k, y: H - (t.y + line.baseline - rise) * k, size: run.sup ? t.size * SUP_SCALE : t.size, font, color: color(t.color),
+            ...(run.i ? { ySkew: degrees(12) } : {}), // 기울임: 글자를 오른쪽으로 12도 눕힌다
+          });
         }
       }
       out.pushOperators(setCharacterSpacing(0));
       done();
     };
     const texts = pageTexts[pageIndex];
-    for (const t of texts) if (!t.el) drawText(t);
-    // 사용자가 놓은 요소는 쌓인 순서대로 그린다
-    for (const el of page.elements) {
+    // 요소는 쌓인 순서대로 그린다
+    const drawEls = async (els: PageElement[]) => {
+     for (const el of els) {
       if (el.type === 'text') {
         const t = texts.find((x) => x.el === el);
         if (t) drawText(t);
@@ -221,6 +228,20 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
       }
       done();
     }
+    };
+    const masters = new Set(src.pages[pageIndex].hideMaster ? [] : src.masterElements ?? []);
+    await drawEls(pageEls[pageIndex].filter((el) => masters.has(el))); // 공통 요소는 맨 아래에
+    for (const im of derivedContent(src, pageIndex).images) {
+      const asset = src.assets[im.assetId];
+      if (!asset) continue;
+      const r = im.rect;
+      out.drawImage(await embedImage(asset), { x: r.x * k, y: H - (r.y + r.h) * k, width: r.w * k, height: r.h * k });
+    }
+    for (const t of texts) if (!t.el) drawText(t);
+    for (const r of derivedContent(src, pageIndex).rules) {
+      out.drawRectangle({ x: r.x * k, y: H - (r.y + r.h) * k, width: r.w * k, height: r.h * k, color: color('#1f1e1c') });
+    }
+    await drawEls(pageEls[pageIndex].filter((el) => !masters.has(el)));
     out.pushOperators(popGraphicsState());
   }
 

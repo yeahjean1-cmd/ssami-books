@@ -1,6 +1,7 @@
 import { memo, useSyncExternalStore } from 'react';
 import { derivedContent, type PlacedText } from '../engine/flow';
 import { fontsVersion, subscribeFonts } from '../engine/fonts';
+import { SUP_RISE, SUP_SCALE, type Line } from '../engine/layout';
 import { imageDrawRect, resolveText } from '../engine/render';
 import { PT_TO_MM } from '../engine/units';
 import { contentRect } from '../model/factory';
@@ -12,6 +13,30 @@ const TEXT_STYLE = { whiteSpace: 'pre', fontKerning: 'none', fontVariantLigature
 export const rotationOf = (el: PageElement) =>
   el.rotation ? `rotate(${el.rotation} ${el.x + el.w / 2} ${el.y + el.h / 2})` : undefined;
 
+/** 조판된 글줄을 그린다. 굵게·기울임·위 첨자(각주 번호)는 묶음 단위로 적용한다. */
+function Runs({ lines, x0, y0, size }: { lines: Line[]; x0: number; y0: number; size: number }) {
+  return (
+    <>
+      {lines.map((line, i) =>
+        line.runs.map((run, j) => {
+          const x = x0 + run.x;
+          const y = y0 + line.baseline - (run.sup ? SUP_RISE * size : 0);
+          return (
+            <text
+              key={`${i}-${j}`}
+              x={run.i ? 0 : x} y={run.i ? 0 : y}
+              transform={run.i ? `translate(${x} ${y}) skewX(-12)` : undefined}
+              fontWeight={run.b ? 700 : undefined}
+              fontSize={run.sup ? size * SUP_SCALE : undefined}
+              letterSpacing={run.ls || undefined}
+            >{run.text}</text>
+          );
+        }),
+      )}
+    </>
+  );
+}
+
 const TextView = memo(function TextView({ el, hidden }: { el: TextElement; hidden?: boolean; fv: number }) {
   const res = resolveText(el);
   if (!res || hidden) return null;
@@ -19,11 +44,7 @@ const TextView = memo(function TextView({ el, hidden }: { el: TextElement; hidde
   return (
     <g fontFamily={`'${font.cssFamily}'`} fontWeight={font.bold ? 700 : 400} fontSize={layout.fontSizeMm} fill={el.style.color}
       style={TEXT_STYLE} transform={rotationOf(el)}>
-      {layout.lines.map((line, i) =>
-        line.runs.map((run, j) => (
-          <text key={`${i}-${j}`} x={el.x + run.x} y={el.y + line.baseline} letterSpacing={run.ls || undefined}>{run.text}</text>
-        )),
-      )}
+      <Runs lines={layout.lines} x0={el.x} y0={el.y} size={layout.fontSizeMm} />
     </g>
   );
 });
@@ -32,11 +53,7 @@ const TextView = memo(function TextView({ el, hidden }: { el: TextElement; hidde
 const PlacedTextView = memo(function PlacedTextView({ t }: { t: PlacedText }) {
   return (
     <g fontFamily={`'${t.font.cssFamily}'`} fontWeight={t.font.bold ? 700 : 400} fontSize={t.fontSize * PT_TO_MM} fill={t.color} style={TEXT_STYLE}>
-      {t.lines.map((line, i) =>
-        line.runs.map((run, j) => (
-          <text key={`${i}-${j}`} x={t.x + run.x} y={t.y + line.baseline} letterSpacing={run.ls || undefined}>{run.text}</text>
-        )),
-      )}
+      <Runs lines={t.lines} x0={t.x} y0={t.y} size={t.fontSize * PT_TO_MM} />
     </g>
   );
 });
@@ -72,11 +89,13 @@ interface Props {
   background?: string;
   /** 재단선 바깥으로 함께 보여 줄 도련 mm */
   bleed?: number;
+  /** 기준선 격자 표시 */
+  grid?: boolean;
   children?: React.ReactNode;
 }
 
 /** 한 쪽을 mm 좌표계의 SVG로 그린다. 썸네일·편집 캔버스·표지가 함께 쓴다. */
-export function PageSvg({ project, pageIndex, scale, showGuides, editingId, background = '#fffefb', bleed = 0, children }: Props) {
+export function PageSvg({ project, pageIndex, scale, showGuides, editingId, background = '#fffefb', bleed = 0, grid, children }: Props) {
   const fv = useFontsVersion();
   const { width, height } = project.format;
   const page = project.pages[pageIndex];
@@ -84,18 +103,30 @@ export function PageSvg({ project, pageIndex, scale, showGuides, editingId, back
   const derived = derivedContent(project, pageIndex);
   const b = bleed;
   const line = 0.75 / scale;
+  // 공통 요소(마스터)는 쪽 내용 아래에 깔린다
+  const masters = page.hideMaster ? [] : project.masterElements ?? [];
+  const drawEl = (el: PageElement, key: string) => el.hidden ? null
+    : el.type === 'text' ? <TextView key={key} el={el} hidden={el.id === editingId} fv={fv} />
+      : el.type === 'image' ? <ImageView key={key} el={el} project={project} />
+        : <rect key={key} x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill} opacity={el.opacity} transform={rotationOf(el)} />;
+  const gridH = grid && project.baselineGrid && page.kind === 'flow' && project.styles ? project.styles.body.fontSize * PT_TO_MM * project.styles.body.lineHeight : 0;
   return (
     <svg width={(width + b * 2) * scale} height={(height + b * 2) * scale} viewBox={`${-b} ${-b} ${width + b * 2} ${height + b * 2}`} style={{ display: 'block' }}>
       <rect x={-b} y={-b} width={width + b * 2} height={height + b * 2} fill={background} />
+      {masters.map((el) => drawEl(el, `m-${el.id}`))}
+      {gridH > 0 && (
+        <g pointerEvents="none" id="baseline-grid">
+          {Array.from({ length: Math.floor(c.h / gridH) + 1 }, (_, i) => (
+            <line key={i} x1={c.x} x2={c.x + c.w} y1={c.y + i * gridH} y2={c.y + i * gridH} stroke="#2f6f9f" strokeOpacity={0.28} strokeWidth={line * 0.7} />
+          ))}
+        </g>
+      )}
       {derived.images.map((im) => project.assets[im.assetId] && (
         <image key={im.key} href={project.assets[im.assetId].dataUrl} x={im.rect.x} y={im.rect.y} width={im.rect.w} height={im.rect.h} preserveAspectRatio="none" />
       ))}
       {derived.texts.map((t) => <PlacedTextView key={t.key} t={t} />)}
-      {page.elements.map((el) =>
-        el.type === 'text' ? <TextView key={el.id} el={el} hidden={el.id === editingId} fv={fv} />
-          : el.type === 'image' ? <ImageView key={el.id} el={el} project={project} />
-            : <rect key={el.id} x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill} opacity={el.opacity} transform={rotationOf(el)} />,
-      )}
+      {derived.rules.map((r, i) => <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} fill="#1f1e1c" />)}
+      {page.elements.map((el) => drawEl(el, el.id))}
       {b > 0 && (
         <g pointerEvents="none">
           {/* 도련 영역을 옅게 덮고 재단선을 표시한다 */}

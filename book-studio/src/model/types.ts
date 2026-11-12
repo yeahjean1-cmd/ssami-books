@@ -33,6 +33,10 @@ interface BaseElement {
   rotation?: number;
   /** 표지 전용: 책등에 놓인 요소. x는 책등 가운데 기준이다. */
   spine?: boolean;
+  /** 잠금: 선택은 되지만 옮기거나 지울 수 없다 */
+  locked?: boolean;
+  /** 숨김: 화면과 PDF에 그리지 않는다 */
+  hidden?: boolean;
 }
 
 export interface TextElement extends BaseElement {
@@ -136,6 +140,8 @@ export interface Master {
     firstPage: number;
     /** 시작 번호 */
     startAt: number;
+    /** 장이 시작할 때마다 번호를 다시 시작 */
+    restartPerChapter?: boolean;
   };
   header: { show: boolean; left: RunningText; right: RunningText };
   fontFamily: string;
@@ -194,6 +200,10 @@ export interface Project {
   toc?: TocSettings;
   templateId?: string;
   cover?: Cover;
+  /** 모든 쪽에 공통으로 깔리는 요소(배경·장식). 공통 요소를 숨긴 쪽에는 나오지 않는다. */
+  masterElements?: PageElement[];
+  /** 본문 줄을 기준선 격자에 맞춘다: 좌우 쪽의 줄 높이가 나란해진다 */
+  baselineGrid?: boolean;
 }
 
 export interface Rect {

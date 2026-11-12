@@ -13,6 +13,13 @@ function autoSize(t: HTMLTextAreaElement) {
   t.style.height = `${t.scrollHeight}px`;
 }
 
+/** 고른 글을 앞뒤 표시로 감싼다. 고른 글이 없으면 표시만 넣고 그 사이에 커서를 둔다. */
+export function wrapSelection(block: Block, t: HTMLTextAreaElement, open: string, close: string) {
+  const { selectionStart: a, selectionEnd: b, value } = t;
+  patchBlock(block.id, { text: value.slice(0, a) + open + value.slice(a, b) + close + value.slice(b) });
+  useStore.setState({ focus: { id: block.id, caret: (a === b ? a : b + close.length) + open.length } });
+}
+
 function BlockEditor({ block, caret }: { block: Block; caret: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
@@ -34,6 +41,13 @@ function BlockEditor({ block, caret }: { block: Block; caret: number }) {
         e.stopPropagation();
         const t = e.currentTarget;
         if (e.nativeEvent.isComposing) return;
+        const key = e.key.toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && (key === 'b' || key === 'i')) {
+          // Ctrl+B 굵게, Ctrl+I 기울임: 고른 글을 표시로 감싼다
+          e.preventDefault();
+          wrapSelection(block, t, key === 'b' ? '**' : '*', key === 'b' ? '**' : '*');
+          return;
+        }
         if (e.key === 'Enter' && !e.shiftKey) {
           // Enter: 새 문단 / Shift+Enter: 문단 안 줄바꿈
           e.preventDefault();
@@ -72,7 +86,8 @@ export function Manuscript({ project }: { project: Project }) {
     <div className="manuscript" ref={ref} id="manuscript">
       <div className="ms-sheet">
         <p className="hint ms-help">
-          Enter로 문단을 나누고, 문단 맨 앞에서 Backspace로 앞 문단과 합쳐요. 왼쪽에서 문단 종류를 고르면 책 디자인이 자동으로 적용돼요.
+          Enter로 문단을 나누고, 문단 맨 앞에서 Backspace로 앞 문단과 합쳐요. 왼쪽에서 문단 종류를 고르면 책 디자인이 자동으로 적용돼요.<br />
+          글자 서식: <b>**굵게**</b>(Ctrl+B) · <i>*기울임*</i>(Ctrl+I) · 각주는 <code>[^각주 내용]</code>을 넣은 자리에 번호가 붙고, 내용은 그 쪽 아래에 놓여요.
         </p>
         {story.map((b) => {
           const active = focus?.id === b.id;
@@ -108,6 +123,11 @@ export function Manuscript({ project }: { project: Project }) {
                 {page && <button className="btn ghost small" onClick={() => goToBlock(b.id)} title="이 문단이 놓인 쪽 보기">{page}쪽</button>}
                 {(active || b.assetId) && (
                   <>
+                    {active && <button className="btn ghost small" data-act="footnote" title="커서 자리에 각주를 넣어요" onMouseDown={(e) => {
+                      e.preventDefault();
+                      const t = document.querySelector<HTMLTextAreaElement>('textarea.ms-text');
+                      if (t) wrapSelection(b, t, '[^', ']');
+                    }}>＋각주</button>}
                     <button className="btn ghost small" onClick={() => addImage(b.id)} title="이 문단 뒤에 이미지를 넣어요">＋이미지</button>
                     <button className="btn ghost small" onClick={() => removeBlock(b.id)} aria-label="문단 삭제">삭제</button>
                   </>

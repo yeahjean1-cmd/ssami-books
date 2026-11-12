@@ -65,8 +65,25 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
   let lostInline = false;
   let tables = 0;
 
+  // 각주: 본문 끝에 모여 있는 각주 내용을 번호 자리에 [^내용]으로 되돌려 넣는다
+  const footnotes = new Map<string, string>();
+  doc.querySelectorAll('li[id^="footnote-"], li[id^="endnote-"]').forEach((li) => {
+    li.querySelectorAll('a').forEach((a) => a.getAttribute('href')?.includes('-ref-') && a.remove());
+    footnotes.set(li.id, clean(li.textContent ?? '').replace(/[\[\]]/g, ''));
+  });
+  doc.querySelectorAll('ol').forEach((ol) => ol.querySelector('li[id^="footnote-"], li[id^="endnote-"]') && ol.remove());
+  doc.querySelectorAll('sup').forEach((sup) => {
+    const id = sup.querySelector('a')?.getAttribute('href')?.slice(1);
+    if (id && footnotes.has(id)) sup.replaceWith(`[^${footnotes.get(id)}]`);
+  });
+
   const pushText = (el: Element, style: StyleName, prefix = '') => {
-    if (el.querySelector('strong, em, u, s, sup, sub')) lostInline = true;
+    if (el.querySelector('u, s, sup, sub')) lostInline = true;
+    // 굵게·기울임은 글 안의 표시로 옮긴다(제목은 스타일 자체가 굵으므로 본문·인용문에서만)
+    if (style === 'body' || style === 'quote') {
+      el.querySelectorAll('em, i').forEach((n) => n.textContent?.trim() && n.replaceWith(`*${n.textContent}*`));
+      el.querySelectorAll('strong, b').forEach((n) => n.textContent?.trim() && n.replaceWith(`**${n.textContent}**`));
+    }
     el.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
     el.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src') ?? '';
@@ -95,9 +112,9 @@ export async function importDocx(bytes: Uint8Array): Promise<ImportResult> {
     }
   };
   walk(doc.body);
-  if (lostInline) warnings.push('굵게·기울임·밑줄 같은 글자 단위 서식은 가져오지 않았어요. 문단 스타일로 다시 지정해 주세요.');
+  if (lostInline) warnings.push('밑줄·취소선·첨자는 가져오지 않았어요. 굵게·기울임과 각주는 그대로 가져와요.');
   if (tables) warnings.push(`표 ${tables}개는 표 모양 없이 줄글로 가져왔어요.`);
-  warnings.push('글꼴·글자 크기·여백은 원본 대신 선택한 책 디자인(템플릿)을 따라요. 각주·머리말·꼬리말은 가져오지 않아요.');
+  warnings.push('글꼴·글자 크기·여백은 원본 대신 선택한 책 디자인(템플릿)을 따라요. 머리말·꼬리말은 가져오지 않아요.');
   return { format: 'Word(DOCX)', blocks, warnings };
 }
 

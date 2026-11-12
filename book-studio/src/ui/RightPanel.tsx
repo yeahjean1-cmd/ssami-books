@@ -8,10 +8,12 @@ import { STYLE_LABEL, STYLE_NAMES, TEMPLATES } from '../model/templates';
 import type { BindingType, Block, ImageElement, RectElement, Master, PageElement, ParaStyle, Project, RunningText, StyleName, TextElement, TextStyle } from '../model/types';
 import { saveFont } from '../store/storage';
 import {
-  applyTemplate, createCover, mutate, notify, patchCover, patchPrint, surfaceOf, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
+  applyShopProfile, applyTemplate, applyUserTemplate, deleteShopProfile, deleteUserTemplate, saveShopProfile, saveUserTemplate, shopProfiles, userTemplates,
+  createCover, mutate, notify, patchCover, patchPrint, surfaceOf, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
   reorderSelection, useStore,
 } from '../store/store';
 import { NumField, Segmented, pickFile, readFile } from './fields';
+import { NameSave } from './Extras';
 import { useFontsVersion } from './PageSvg';
 
 async function addUserFont(): Promise<string | null> {
@@ -191,6 +193,8 @@ function BookDesign({ project }: { project: Project }) {
   const pn = (patch: Partial<Master['pageNumber']>, key: string) => patchMaster((x) => ({ ...x, pageNumber: { ...x.pageNumber, ...patch } }), key);
   const hd = (patch: Partial<Master['header']>, key: string) => patchMaster((x) => ({ ...x, header: { ...x.header, ...patch } }), key);
   const hasToc = project.pages.some((p) => p.kind === 'toc');
+  useStore((s) => s.libraryVersion);
+  const mine = userTemplates();
   return (
     <>
       <section>
@@ -206,6 +210,23 @@ function BookDesign({ project }: { project: Project }) {
           ))}
         </div>
         <p className="hint">템플릿은 시작점이에요. 본문에서 문단을 누르면 글꼴·크기·간격을 자유롭게 고칠 수 있어요.</p>
+        {mine.length > 0 && (
+          <div className="saved-list" id="my-templates">
+            {mine.map((t) => (
+              <div key={t.id} className={project.templateId === t.id ? 'on' : ''}>
+                <span>{t.name}</span>
+                <button className="btn small" onClick={() => applyUserTemplate(t.id)}>적용</button>
+                <button className="btn small ghost" aria-label={`${t.name} 삭제`} onClick={() => deleteUserTemplate(t.id)}>삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <NameSave id="tpl-name" placeholder="지금 디자인의 이름" label="내 템플릿으로 저장" onSave={saveUserTemplate} />
+        <label className="check">
+          <input id="baseline-grid" type="checkbox" checked={!!project.baselineGrid} onChange={(e) => mutate((p) => ({ ...p, baselineGrid: e.target.checked }))} />
+          본문 줄을 기준선 격자에 맞추기
+        </label>
+        <p className="hint">격자를 켜면 제목이나 인용문 뒤에도 본문 줄이 같은 높이에 놓여, 펼친 양쪽의 줄이 나란해져요.</p>
       </section>
       <section>
         <h3>쪽 번호</h3>
@@ -223,6 +244,10 @@ function BookDesign({ project }: { project: Project }) {
               <NumField id="pn-first" label="번호를 시작할 쪽" unit="쪽" value={m.pageNumber.firstPage} min={1} max={project.pages.length} onChange={(v) => pn({ firstPage: Math.round(v) }, 'first')} />
               <NumField label="시작 번호" value={m.pageNumber.startAt} min={1} max={9999} onChange={(v) => pn({ startAt: Math.round(v) }, 'start')} />
             </div>
+            <label className="check">
+              <input id="pn-restart" type="checkbox" checked={!!m.pageNumber.restartPerChapter} onChange={(e) => pn({ restartPerChapter: e.target.checked }, 'restart')} />
+              장마다 번호 다시 시작
+            </label>
           </>
         )}
       </section>
@@ -331,6 +356,8 @@ async function loadProfile() {
 /** 인쇄 설정: 도련, 제본, 인쇄소 출력 프로파일 */
 function PrintSettings({ project }: { project: Project }) {
   const profile = project.print.profile;
+  useStore((s) => s.libraryVersion);
+  const shops = shopProfiles();
   return (
     <section>
       <h3>인쇄 설정</h3>
@@ -353,6 +380,21 @@ function PrintSettings({ project }: { project: Project }) {
         </div>
       </div>
       <p className="hint">인쇄소가 알려 준 CMYK 프로파일(예: Japan Color 2001 Coated, FOGRA39)을 불러오면 PDF/X-4로 내보낼 수 있어요. 프로젝트에 함께 저장돼요.</p>
+      <div className="field">
+        <span>인쇄소별 설정 (도련·제본·프로파일·종이)</span>
+        {shops.length > 0 && (
+          <div className="saved-list" id="shop-profiles">
+            {shops.map((sp) => (
+              <div key={sp.id}>
+                <span>{sp.name}</span>
+                <button className="btn small" onClick={() => applyShopProfile(sp.id)}>적용</button>
+                <button className="btn small ghost" aria-label={`${sp.name} 삭제`} onClick={() => deleteShopProfile(sp.id)}>삭제</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <NameSave id="shop-name" placeholder="인쇄소 이름" label="지금 설정 저장" onSave={saveShopProfile} />
+      </div>
     </section>
   );
 }
@@ -486,8 +528,11 @@ export function RightPanel({ project }: { project: Project }) {
       {selected.length === 1 && selected[0].type === 'rect' && <RectProps el={selected[0]} pageId={page.id} />}
       {selected.length === 0 && onCover && project.cover && <CoverProps project={project} />}
       {selected.length === 0 && onCover && !project.cover && <PrintSettings project={project} />}
-      {selected.length === 0 && !onCover && block && <BlockProps block={block} project={project} />}
-      {selected.length === 0 && !onCover && !block && (
+      {selected.length === 0 && centerView0 === 'master' && (
+        <section><h3>공통 요소</h3><p className="hint">위의 ‘글 상자·이미지·도형’으로 모든 쪽에 깔릴 배경이나 장식을 놓아 보세요. 쪽 번호와 머리말은 ‘페이지’ 보기의 책 디자인에서 설정해요.</p></section>
+      )}
+      {selected.length === 0 && !onCover && centerView0 !== 'master' && block && <BlockProps block={block} project={project} />}
+      {selected.length === 0 && !onCover && centerView0 !== 'master' && !block && (
         <>
           {project.story && project.master && <BookDesign project={project} />}
           <DocumentProps project={project} />

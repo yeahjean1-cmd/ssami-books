@@ -6,8 +6,17 @@ import { layoutText, type TextLayout } from './layout';
 export interface ResolvedText {
   layout: TextLayout;
   font: LoadedFont;
+  /** 문단 안 굵은 글자에 쓰는 폰트 */
+  fontBold?: LoadedFont;
   /** 지정한 폰트가 없어 다른 폰트로 대체되었는지 */
   missingFont: boolean;
+}
+
+/** 같은 서체의 굵은 글꼴. 기본이 이미 굵거나 굵은 글꼴 파일이 없으면 없음. */
+export function boldOf(family: string, base: LoadedFont): LoadedFont | undefined {
+  if (base.bold) return undefined;
+  const b = resolveFont(family, true);
+  return !b.missing && b.font?.bold ? b.font : undefined;
 }
 
 const cache = new WeakMap<TextElement, { v: number; r: ResolvedText }>();
@@ -19,7 +28,8 @@ export function resolveText(el: TextElement): ResolvedText | null {
   if (hit && hit.v === v) return hit.r;
   const { font, missing } = resolveFont(el.style.fontFamily, el.style.bold);
   if (!font) return null;
-  const r = { layout: layoutText(el.text, el.style, el.w, el.h, font), font, missingFont: missing };
+  const fontBold = boldOf(el.style.fontFamily, font);
+  const r = { layout: layoutText(el.text, el.style, el.w, el.h, { regular: font, bold: fontBold }, { markup: true }), font, fontBold, missingFont: missing };
   cache.set(el, { v, r });
   return r;
 }

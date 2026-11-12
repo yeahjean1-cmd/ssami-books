@@ -7,7 +7,8 @@ import {
   addImage, addPage, addRect, addTextBox, addTocPage, openManuscript, surface, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
   movePage, mutate, notify, pasteClipboard, patchElements, redo, selectPage, undo, useStore,
 } from '../store/store';
-import { Canvas, fitZoom } from './Canvas';
+import { Canvas, MasterView, fitZoom } from './Canvas';
+import { BookPreview, Layers } from './Extras';
 import { pickImageAsset } from './assets';
 import { CoverView } from './CoverView';
 import { Manuscript } from './Manuscript';
@@ -28,6 +29,7 @@ function Thumbnails({ project }: { project: Project }) {
   const currentPage = useStore((s) => s.currentPage);
   const dragFrom = useRef<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
+  const [tab, setTab] = useState<'pages' | 'layers'>('pages');
   const [scroll, setScroll] = useState({ top: 0, height: 800 });
   const list = useRef<HTMLDivElement>(null);
   const scale = THUMB_W / project.format.width;
@@ -50,10 +52,14 @@ function Thumbnails({ project }: { project: Project }) {
   return (
     <aside className="panel left">
       <div className="panel-head">
-        <h3>페이지</h3>
+        <div className="tabs">
+          <button className={tab === 'pages' ? 'on' : ''} onClick={() => setTab('pages')}>페이지</button>
+          <button className={tab === 'layers' ? 'on' : ''} id="tab-layers" onClick={() => setTab('layers')}>레이어</button>
+        </div>
         <span id="page-count">{project.pages.length}쪽</span>
       </div>
-      <div className="thumbs" ref={list} onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
+      {tab === 'layers' && <Layers project={project} />}
+      <div className="thumbs" ref={list} style={{ display: tab === 'pages' ? undefined : 'none' }} onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
         <div style={{ height: project.pages.length * rowH, position: 'relative' }}>
           {project.pages.slice(first, last).map((pg, k) => {
             const i = first + k;
@@ -84,7 +90,7 @@ function Thumbnails({ project }: { project: Project }) {
           })}
         </div>
       </div>
-      <div className="panel-foot">
+      <div className="panel-foot" style={{ display: tab === 'pages' ? undefined : 'none' }}>
         <button className="btn" id="add-blank" onClick={() => addPage(false)} title="현재 쪽 뒤에 자유롭게 꾸미는 빈 쪽을 추가해요">＋ 빈 쪽</button>
         <button className="btn" id="add-page" onClick={() => addPage(true)} title="현재 쪽 뒤에 글 상자가 있는 쪽을 추가해요">＋ 글 상자</button>
         {project.story && !project.pages.some((p) => p.kind === 'toc') && (
@@ -106,11 +112,11 @@ export function Editor({ project }: { project: Project }) {
   const s = useStore();
   const canSpread = project.print.duplex;
 
-  const [dialog, setDialog] = useState<'export' | 'preflight' | null>(null);
+  const [dialog, setDialog] = useState<'export' | 'preflight' | 'preview' | null>(null);
   const issues = usePreflight(project);
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.filter((i) => i.level === 'warn').length;
-  const canPlace = s.centerView === 'pages' || (s.centerView === 'cover' && !!project.cover);
+  const canPlace = s.centerView === 'pages' || s.centerView === 'master' || (s.centerView === 'cover' && !!project.cover);
 
   const exportProjectFile = () => {
     downloadBlob(new Blob([JSON.stringify(project)], { type: 'application/json' }), `${safeFilename(project.meta.title)}.bookstudio`);
@@ -184,8 +190,10 @@ export function Editor({ project }: { project: Project }) {
             <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null, selection: [], editingId: null })}>페이지</button>
             {project.story && <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고</button>}
             <button className={s.centerView === 'cover' ? 'on' : ''} id="view-cover" onClick={() => useStore.setState({ centerView: 'cover', selection: [], editingId: null, selectedBlock: null, focus: null })}>표지</button>
+            <button className={s.centerView === 'master' ? 'on' : ''} id="view-master" title="모든 쪽에 공통으로 깔리는 배경·장식" onClick={() => useStore.setState({ centerView: 'master', selection: [], editingId: null, selectedBlock: null, focus: null })}>공통</button>
           </div>
         )}
+        {project.cover && <button className="btn ghost" id="open-preview" onClick={() => setDialog('preview')}>책 미리보기</button>}
         <div className="spacer" />
         <button className="btn ghost" id="save-file" onClick={exportProjectFile} title="편집 가능한 프로젝트 파일(.bookstudio)로 내보내요">프로젝트 파일로 저장</button>
         <button className="btn primary" id="export-pdf" onClick={() => setDialog('export')}>PDF 내보내기</button>
@@ -194,7 +202,7 @@ export function Editor({ project }: { project: Project }) {
       <div className="workspace">
         <Thumbnails project={project} />
         {s.centerView === 'manuscript' && project.story ? <Manuscript project={project} />
-          : s.centerView === 'cover' ? <CoverView project={project} /> : <Canvas project={project} />}
+          : s.centerView === 'cover' ? <CoverView project={project} /> : s.centerView === 'master' ? <MasterView project={project} /> : <Canvas project={project} />}
         <RightPanel project={project} />
       </div>
 
@@ -228,6 +236,7 @@ export function Editor({ project }: { project: Project }) {
         <span id="save-status" className={`save ${s.saveState}`}>{SAVE_LABEL[s.saveState]}</span>
       </footer>
       {dialog === 'export' && <ExportDialog project={project} onClose={() => setDialog(null)} onPreflight={() => setDialog('preflight')} />}
+      {dialog === 'preview' && project.cover && <BookPreview project={project} onClose={() => setDialog(null)} />}
       {dialog === 'preflight' && <PreflightDialog project={project} onClose={() => setDialog(null)} />}
     </div>
   );

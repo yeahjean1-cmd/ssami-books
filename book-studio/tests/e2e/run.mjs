@@ -159,7 +159,7 @@ await pick('#import-file', f('manuscript.docx'));
 await page.waitForSelector('#import-stats');
 assert(await stat(0) === 2 && await stat(1) === 1 && await stat(3) === 1, 'Word 제목 스타일 → 장 2·절 1, 이미지 1개');
 const warn = await page.textContent('.modal .notice');
-assert(warn.includes('굵게') && warn.includes('표 1개'), '잃은 서식(굵게, 표)을 미리 알림');
+assert(warn.includes('표 1개') && !warn.includes('굵게·기울임·밑줄'), '잃는 서식(표)을 미리 알림');
 await page.click('#import-next');
 await finishWizard('novel');
 const docxPages = await pageCount();
@@ -170,6 +170,9 @@ for (let i = 0; i < docxPages && !foundImage; i++) {
 }
 assert(foundImage, '문서 안의 이미지가 본문 흐름에 들어감');
 await page.screenshot({ path: f('5-docx.png') });
+await page.click('#view-manuscript');
+assert((await page.textContent('#manuscript')).includes('**천천히 걷는 사람**'), 'Word의 굵은 글자를 굵게 표시로 가져옴');
+await page.click('#view-pages');
 await page.click('#go-home');
 
 console.log('5. 한글(HWPX·HWP) 가져오기');
@@ -303,6 +306,79 @@ await page.click('#export-pdf');
 await page.click('#export-dialog [data-preset="proof"]');
 const proof = await exportAll('proof-');
 assert(/TrimBox/.test(boxes(proof.interior.to)) && !fs.readFileSync(proof.interior.to).toString('latin1').includes('GTS_PDFX'), '검수용 PDF: 도련·재단선 포함, PDF/X 정보 없음');
+
+
+console.log('9. 글자 서식·각주·기준선 격자·공통 요소·레이어·3D 미리보기');
+await page.click('#view-manuscript');
+await page.locator('.ms-row .ms-text').nth(1).click();
+await page.locator('textarea.ms-text').fill('그는 천천히 걸었다. Walden을 읽었다. ' + para.repeat(2));
+await page.locator('textarea.ms-text').evaluate((t) => t.setSelectionRange(3, 6));
+await page.keyboard.press('Control+b');
+assert((await page.inputValue('textarea.ms-text')).startsWith('그는 **천천히** 걸었다'), 'Ctrl+B로 고른 글을 굵게');
+await page.locator('textarea.ms-text').fill('그는 **천천히** 걸었다. *Walden*[^소로의 책, 1854년.]을 읽었다. ' + para.repeat(2));
+await page.click('#view-pages');
+await page.click('.thumb[data-index="2"]');
+const marks = await page.evaluate(() => {
+  const texts = [...document.querySelectorAll('.page-stage.active svg text')];
+  const find = (t) => texts.find((x) => x.textContent === t);
+  return {
+    bold: find('천천히')?.getAttribute('font-weight'), italic: find('Walden')?.getAttribute('transform') ?? '',
+    note: texts.some((x) => x.textContent.startsWith('1 소로의 책')), raw: texts.some((x) => x.textContent.includes('**') || x.textContent.includes('[^')),
+  };
+});
+assert(marks.bold === '700' && marks.italic.includes('skewX') && marks.note && !marks.raw, '본문에 굵게·기울임이 적용되고, 각주가 같은 쪽 아래에 번호와 함께 놓임');
+await page.screenshot({ path: f('11-footnote.png') });
+
+await page.click('#canvas', { position: { x: 5, y: 5 } });
+await page.check('#baseline-grid');
+assert(await page.locator('.page-stage.active #baseline-grid').count() === 1, '기준선 격자 켜기');
+await page.check('#pn-restart');
+await page.fill('#tpl-name', '내 에세이');
+await page.locator('.name-save', { has: page.locator('#tpl-name') }).locator('button').click();
+assert(await page.locator('#my-templates > div').count() === 1, '지금 디자인을 내 템플릿으로 저장');
+await page.uncheck('#pn-restart');
+
+await page.click('#view-master');
+await page.click('#add-rect');
+await page.click('#tab-layers');
+assert(await page.locator('.layer').count() === 1, '레이어 목록에 공통 요소가 보임');
+await page.click('#view-pages');
+const sage = () => page.locator('.page-stage.active svg > rect[fill="#7a8b72"]').count();
+assert(await sage() === 1, '공통 요소가 본문 쪽에 깔림');
+await page.locator('.statusbar button[aria-label="이전 쪽"]').click(); await page.locator('.statusbar button[aria-label="이전 쪽"]').click();
+assert((await page.textContent('#page-status')).startsWith('1 /') && await sage() === 0, '공통 요소를 숨긴 속표지에는 나오지 않음');
+await page.click('#view-master');
+await page.click('.layer [data-act="hide"]');
+assert(await page.locator('.page-stage svg > rect[fill="#7a8b72"]').count() === 0, '레이어 숨기기');
+await page.click('.layer [data-act="hide"]');
+await page.click('.layer [data-act="lock"]');
+await page.click('.layer');
+await page.keyboard.press('Delete');
+assert(await page.locator('.layer').count() === 1, '잠근 요소는 지워지지 않음');
+await page.click('.layer [data-act="lock"]');
+await page.keyboard.press('Delete');
+assert(await page.locator('.layer').count() === 0, '잠금을 풀면 지울 수 있음');
+
+await page.click('#open-preview');
+await page.waitForSelector('#book3d');
+const a0 = await page.getAttribute('#book3d', 'data-angle');
+const sb = await page.locator('.stage3d').boundingBox();
+await page.mouse.move(sb.x + sb.width / 2, sb.y + sb.height / 2);
+await page.mouse.down(); await page.mouse.move(sb.x + sb.width / 2 + 60, sb.y + sb.height / 2, { steps: 4 }); await page.mouse.up();
+assert(await page.getAttribute('#book3d', 'data-angle') !== a0, '3D 책 미리보기를 끌어서 돌림');
+await page.screenshot({ path: f('12-preview3d.png') });
+await page.click('#book-preview .btn.primary');
+
+await page.click('#export-pdf');
+await page.uncheck('#ex-cover');
+downloads.length = 0;
+await page.click('#ex-run');
+await page.waitForSelector('#export-dialog', { state: 'detached', timeout: 60000 });
+for (let i = 0; i < 50 && !downloads.length; i++) await page.waitForTimeout(100);
+await downloads[0].saveAs(f('styled.pdf'));
+const p3 = execSync(`pdftotext -f 3 -l 3 "${f('styled.pdf')}" -`).toString();
+assert(p3.includes('천천히') && p3.includes('소로의 책, 1854년.') && !p3.includes('**'), 'PDF에도 서식과 각주가 들어감');
+execSync(`pdftoppm -f 3 -l 3 -r 80 -png "${f('styled.pdf')}" "${f('styled')}"`);
 
 assert(errors.filter((e) => !e.includes('zip')).length === 0, '콘솔 오류 없음 ' + errors.join(' | '));
 await browser.close();

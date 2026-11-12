@@ -17,7 +17,7 @@ interface State {
   editingId: string | null;
   /** 본문 흐름에서 선택한 문단 */
   selectedBlock: string | null;
-  centerView: 'pages' | 'manuscript' | 'cover';
+  centerView: 'pages' | 'manuscript' | 'cover' | 'master';
   /** 내지에서 도련 영역을 함께 보여 준다 */
   showBleed: boolean;
   /** 원고 보기에서 커서를 둘 문단과 위치 */
@@ -26,6 +26,8 @@ interface State {
   viewMode: 'single' | 'spread';
   showGuides: boolean;
   saveState: SaveState;
+  /** 내 템플릿·인쇄소 프로파일 목록이 바뀔 때마다 올라간다 */
+  libraryVersion: number;
   toast: { text: string; kind: 'info' | 'error' } | null;
 }
 
@@ -48,6 +50,7 @@ export const useStore = create<State>(() => ({
   viewMode: 'spread',
   showGuides: true,
   saveState: 'saved',
+  libraryVersion: 0,
   toast: null,
 }));
 
@@ -159,9 +162,11 @@ export function flushSave(): Promise<void> {
 
 // ---- 편집 동작 ----
 export const COVER_ID = 'cover';
+export const MASTER_ID = 'master';
 
 /** 쪽(또는 표지)의 요소를 바꾼다. 표지는 화면 좌표로 고친 뒤 책등과 무관한 저장 좌표로 되돌린다. */
 const mapPage = (p: Project, pageId: string, fn: (page: Page) => Page): Project => {
+  if (pageId === MASTER_ID) return { ...p, masterElements: fn({ id: MASTER_ID, elements: p.masterElements ?? [] }).elements };
   if (pageId !== COVER_ID) return { ...p, pages: p.pages.map((pg) => (pg.id === pageId ? fn(pg) : pg)) };
   if (!p.cover) return p;
   const g = coverGeom(p);
@@ -177,6 +182,7 @@ export function surfaceOf(project: Project, centerView: string, currentPage: num
     const m = 15;
     return { pageId: COVER_ID, elements: project.cover.elements.map((e) => toDisplay(e, g)), place: { x: f.x + m, y: m, w: f.w - m * 2, h: f.h - m * 2 } };
   }
+  if (centerView === 'master') return { pageId: MASTER_ID, elements: project.masterElements ?? [], place: contentRect(project, 0) };
   const page = project.pages[currentPage];
   return { pageId: page.id, elements: page.elements, place: contentRect(project, currentPage) };
 }
@@ -285,7 +291,7 @@ function pruneAssets(p: Project): Project {
   const used = new Set<string>();
   for (const pg of p.pages) for (const e of pg.elements) if (e.type === 'image') used.add(e.assetId);
   for (const b of p.story ?? []) if (b.assetId) used.add(b.assetId);
-  for (const e of p.cover?.elements ?? []) if (e.type === 'image') used.add(e.assetId);
+  for (const e of [...(p.cover?.elements ?? []), ...(p.masterElements ?? [])]) if (e.type === 'image') used.add(e.assetId);
   const ids = Object.keys(p.assets);
   if (ids.every((id) => used.has(id))) return p;
   return { ...p, assets: Object.fromEntries(ids.filter((id) => used.has(id)).map((id) => [id, p.assets[id]])) };
@@ -296,9 +302,11 @@ export function deleteSelection() {
   if (!project || !selection.length) return;
   const { pageId } = surface();
   mutate((p) => pruneAssets(mapPage(p, pageId, (pg) => ({
-    ...pg, elements: pg.elements.filter((e) => !selection.includes(e.id)),
+    ...pg, elements: pg.elements.filter((e) => !selection.includes(e.id) || e.locked),
   }))));
-  set({ selection: [], editingId: null });
+  // 잠겨서 지워지지 않은 요소는 선택된 채로 둔다
+  const left = new Set(surface().elements.map((e) => e.id));
+  set({ selection: selection.filter((id) => left.has(id)), editingId: null });
 }
 
 let clipboard: PageElement[] = [];
@@ -451,3 +459,70 @@ export function patchPrint(patch: Partial<Project['print']>, key: string) {
 }
 
 export { bleedOf };
+
+// ---- 레이어 ----
+/** 요소를 한 단계 앞(위)이나 뒤(아래)로 옮긴다. */
+export function moveElement(id: string, dir: 1 | -1) {
+  const { pageId } = surface();
+  mutate((p) => mapPage(p, pageId, (pg) => {
+    const i = pg.elements.findIndex((e) => e.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= pg.elements.length) return pg;
+    const elements = [...pg.elements];
+    [elements[i], elements[j]] = [elements[j], elements[i]];
+    return { ...pg, elements };
+  }));
+}
+
+// ---- 내 템플릿·인쇄소 프로파일 (이 기기에 저장되어 다른 책에서도 쓴다) ----
+export interface UserTemplate { id: string; name: string; styles: Project['styles']; master: Project['master']; margins: Project['margins']; baselineGrid?: boolean }
+export interface ShopProfile { id: string; name: string; bleed: number; bindingType: Project['print']['bindingType']; profile?: Project['print']['profile']; paperId?: string; paperThickness?: number }
+
+function readList<T>(key: string): T[] {
+  try {
+    return JSON.parse(localStorage.getItem(key) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+function writeList<T>(key: string, list: T[]) {
+  try {
+    localStorage.setItem(key, JSON.stringify(list));
+    set({ libraryVersion: get().libraryVersion + 1 });
+    return true;
+  } catch {
+    notify('저장하지 못했어요. 저장 공간이 부족할 수 있어요.', 'error');
+    return false;
+  }
+}
+export const userTemplates = () => readList<UserTemplate>('bs.templates');
+export const shopProfiles = () => readList<ShopProfile>('bs.shops');
+
+export function saveUserTemplate(name: string) {
+  const p = get().project;
+  if (!p?.styles || !name.trim()) return;
+  const t: UserTemplate = { id: uid(), name: name.trim(), styles: p.styles, master: p.master, margins: p.margins, baselineGrid: p.baselineGrid };
+  if (writeList('bs.templates', [...userTemplates(), t])) notify(`‘${t.name}’ 템플릿을 저장했어요. 다른 책에서도 쓸 수 있어요.`);
+}
+export function applyUserTemplate(id: string) {
+  const t = userTemplates().find((x) => x.id === id);
+  if (t) mutate((p) => ({ ...p, styles: structuredClone(t.styles), master: structuredClone(t.master), baselineGrid: t.baselineGrid, templateId: t.id }));
+}
+export const deleteUserTemplate = (id: string) => writeList('bs.templates', userTemplates().filter((x) => x.id !== id));
+
+export function saveShopProfile(name: string) {
+  const p = get().project;
+  if (!p || !name.trim()) return;
+  const sp: ShopProfile = { id: uid(), name: name.trim(), bleed: bleedOf(p), bindingType: p.print.bindingType, profile: p.print.profile, paperId: p.cover?.paperId, paperThickness: p.cover?.paperThickness };
+  if (writeList('bs.shops', [...shopProfiles(), sp])) notify(`인쇄소 설정 ‘${sp.name}’을(를) 저장했어요.`);
+}
+export function applyShopProfile(id: string) {
+  const sp = shopProfiles().find((x) => x.id === id);
+  if (!sp) return;
+  mutate((p) => ({
+    ...p, print: { ...p.print, bleed: sp.bleed, bindingType: sp.bindingType, profile: sp.profile },
+    cover: p.cover && sp.paperId ? { ...p.cover, paperId: sp.paperId, paperThickness: sp.paperThickness ?? p.cover.paperThickness } : p.cover,
+  }));
+  notify(`‘${sp.name}’ 설정을 적용했어요.`);
+}
+export const deleteShopProfile = (id: string) => writeList('bs.shops', shopProfiles().filter((x) => x.id !== id));

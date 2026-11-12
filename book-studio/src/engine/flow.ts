@@ -3,7 +3,8 @@
 import { contentRect, isRightHand } from '../model/factory';
 import type { Block, ParaStyle, Project, Rect, StyleName, TextStyle } from '../model/types';
 import { fontsVersion, resolveFont, type LoadedFont } from './fonts';
-import { layoutText, type Line, type TextLayout } from './layout';
+import { layoutText, plainText, type Line, type TextLayout } from './layout';
+import { boldOf } from './render';
 import { PT_TO_MM } from './units';
 
 /** 한 쪽에 놓인 문단 조각 (문단이 쪽을 넘어가면 여러 조각으로 나뉜다) */
@@ -16,11 +17,17 @@ export interface Fragment {
   w: number;
   lines: Line[];
   font: LoadedFont;
+  fontBold?: LoadedFont;
   style: ParaStyle;
 }
 
+/** 쪽 아래에 놓이는 각주 */
+export interface Note { n: number; text: string }
+
 export interface Pagination {
   pages: Fragment[][];
+  /** 쪽별 각주 */
+  notes: Note[][];
   /** 문단이 시작하는 본문 쪽(0부터) */
   blockPage: Map<string, number>;
   missingFonts: Set<string>;
@@ -35,6 +42,7 @@ export interface PlacedText {
   h: number;
   lines: Line[];
   font: LoadedFont;
+  fontBold?: LoadedFont;
   /** pt */
   fontSize: number;
   color: string;
@@ -67,7 +75,7 @@ export interface Derived {
   flowPagesNeeded: number;
 }
 
-const blockLayouts = new WeakMap<Block, { style: ParaStyle; w: number; fv: number; layout: TextLayout; font: LoadedFont; missing: boolean }>();
+const blockLayouts = new WeakMap<Block, { style: ParaStyle; w: number; fv: number; layout: TextLayout; font: LoadedFont; fontBold?: LoadedFont; missing: boolean }>();
 const IMAGE_GAP = 4;
 const HEADINGS: StyleName[] = ['chapter', 'section'];
 
@@ -77,10 +85,29 @@ function layoutBlock(block: Block, style: ParaStyle, w: number) {
   const hit = blockLayouts.get(block);
   if (hit && hit.style === style && hit.w === w && hit.fv === fv) return hit;
   const { font, missing } = resolveFont(style.fontFamily, style.bold);
-  const layout = layoutText(block.text, { ...style, paraSpacing: 0 }, w, Infinity, font!);
-  const r = { style, w, fv, layout, font: font!, missing };
+  const fontBold = boldOf(style.fontFamily, font!);
+  const layout = layoutText(block.text, { ...style, paraSpacing: 0 }, w, Infinity, { regular: font!, bold: fontBold }, { markup: true });
+  const r = { style, w, fv, layout, font: font!, fontBold, missing };
   blockLayouts.set(block, r);
   return r;
+}
+
+const NOTE_GAP = 3; // 본문과 각주 사이 mm
+export const noteStyle = (body: ParaStyle): TextStyle => ({ ...body, fontSize: Math.max(6, body.fontSize * 0.8), lineHeight: 1.5, indent: 0, paraSpacing: 0 });
+const noteCache = new Map<string, TextLayout>();
+
+/** 각주 한 개를 조판한다(번호 포함). */
+export function layoutNote(note: Note, body: ParaStyle, w: number): { layout: TextLayout; font: LoadedFont; style: TextStyle } {
+  const style = noteStyle(body);
+  const { font } = resolveFont(style.fontFamily, style.bold);
+  const key = `${fontsVersion()}|${style.fontFamily}|${style.fontSize}|${style.align}|${w}|${note.n}|${note.text}`;
+  let layout = noteCache.get(key);
+  if (!layout) {
+    if (noteCache.size > 2000) noteCache.clear();
+    layout = layoutText(`${note.n} ${note.text}`, style, w, Infinity, font!);
+    noteCache.set(key, layout);
+  }
+  return { layout, font: font!, style };
 }
 
 export function paginate(
@@ -89,8 +116,12 @@ export function paginate(
   frameW: number,
   frameH: number,
   imageSize: (assetId: string) => { w: number; h: number } | undefined,
+  opts: { grid?: boolean } = {},
 ): Pagination {
   const pages: Fragment[][] = [];
+  const notes: Note[][] = [];
+  let pageNotes: Note[] = [];
+  let notesH = 0; // 이 쪽 각주가 차지하는 높이(간격 포함)
   const blockPage = new Map<string, number>();
   const missingFonts = new Set<string>();
   let page: Fragment[] = [];
@@ -98,7 +129,10 @@ export function paginate(
   const eps = 0.01;
   const newPage = () => {
     pages.push(page);
+    notes.push(pageNotes);
     page = [];
+    pageNotes = [];
+    notesH = 0;
     y = 0;
   };
   const bodyLineH = styles.body.fontSize * PT_TO_MM * styles.body.lineHeight;
@@ -125,7 +159,7 @@ export function paginate(
     }
 
     const w = Math.max(10, frameW - style.inset * 2);
-    const { layout, font, missing } = layoutBlock(block, style, w);
+    const { layout, font, fontBold, missing } = layoutBlock(block, style, w);
     if (missing) missingFonts.add(style.fontFamily);
     const lineH = layout.fontSizeMm * style.lineHeight;
     const lines = layout.lines;
@@ -133,9 +167,21 @@ export function paginate(
     let start = 0;
 
     while (start < lines.length) {
-      const before = y === 0 ? (style.breakBefore && start === 0 ? style.spaceBefore : 0) : start === 0 ? style.spaceBefore : 0;
+      let before = y === 0 ? (style.breakBefore && start === 0 ? style.spaceBefore : 0) : start === 0 ? style.spaceBefore : 0;
+      // 기준선 격자: 본문 문단의 첫 줄을 본문 줄 높이의 배수 자리에 맞춘다
+      if (opts.grid && !isHeading && start === 0) before = Math.ceil((y + before - eps) / bodyLineH) * bodyLineH - y;
       const left = lines.length - start;
-      const fit = Math.floor((frameH - y - before + eps) / lineH);
+      // 각주가 있는 줄은 각주가 같은 쪽 아래에 들어갈 자리까지 함께 따진다
+      let fit = 0;
+      let addH = 0;
+      let count = pageNotes.length;
+      for (; fit < left; fit++) {
+        let h = 0;
+        for (const idx of lines[start + fit].notes ?? []) h += layoutNote({ n: ++count, text: layout.notes[idx] }, styles.body, frameW).layout.fullHeight;
+        const total = notesH + addH + h;
+        if (y + before + (fit + 1) * lineH + (total ? total + (notesH ? 0 : NOTE_GAP) : 0) > frameH + eps) break;
+        addH += h;
+      }
       let take: number;
       if (fit >= left) {
         take = left;
@@ -157,18 +203,34 @@ export function paginate(
       }
       const top0 = lines[start].top;
       if (start === 0) blockPage.set(block.id, pages.length);
-      page.push({
-        block, y: y + before, h: take * lineH, x: style.inset, w, font, style,
-        lines: start === 0 && take === lines.length ? lines : lines.slice(start, start + take).map((l) => ({ ...l, top: l.top - top0, baseline: l.baseline - top0 })),
+      const slice = lines.slice(start, start + take);
+      const hasNotes = slice.some((l) => l.notes);
+      const fragLines = top0 === 0 && !hasNotes ? (take === lines.length ? lines : slice) : slice.map((l) => {
+        const moved = { ...l, top: l.top - top0, baseline: l.baseline - top0 };
+        if (!l.notes) return moved;
+        // 각주 번호는 쪽마다 1부터 매긴다
+        moved.runs = l.runs.map((r) => {
+          if (r.fn === undefined) return r;
+          const note = { n: pageNotes.length + 1, text: layout.notes[r.fn] };
+          if (!pageNotes.length) notesH += NOTE_GAP;
+          pageNotes.push(note);
+          notesH += layoutNote(note, styles.body, frameW).layout.fullHeight;
+          return { ...r, text: String(note.n) };
+        });
+        return moved;
       });
+      page.push({ block, y: y + before, h: take * lineH, x: style.inset, w, font, fontBold, style, lines: fragLines });
       y += before + take * lineH;
       start += take;
       if (start < lines.length) newPage();
       else y += style.spaceAfter;
     }
   }
-  if (page.length || !pages.length) pages.push(page);
-  return { pages, blockPage, missingFonts };
+  if (page.length || !pages.length) {
+    pages.push(page);
+    notes.push(pageNotes);
+  }
+  return { pages, notes, blockPage, missingFonts };
 }
 
 function roman(n: number): string {
@@ -179,7 +241,7 @@ function roman(n: number): string {
   return out;
 }
 
-let lastPagination: { story: Block[]; styles: unknown; w: number; h: number; fv: number; assets: unknown; result: Pagination } | null = null;
+let lastPagination: { story: Block[]; styles: unknown; w: number; h: number; fv: number; assets: unknown; grid: boolean; result: Pagination } | null = null;
 const derivedCache = new WeakMap<Project, Derived>();
 
 /** 원고에서 파생되는 정보(쪽 나눔, 쪽 번호, 목차)를 계산한다. */
@@ -192,14 +254,14 @@ export function derive(project: Project): Derived {
     const c = contentRect(project, 0);
     const fv = fontsVersion();
     const lp = lastPagination;
-    if (lp && lp.story === story && lp.styles === styles && lp.w === c.w && lp.h === c.h && lp.fv === fv && lp.assets === project.assets) {
+    if (lp && lp.story === story && lp.styles === styles && lp.w === c.w && lp.h === c.h && lp.fv === fv && lp.assets === project.assets && lp.grid === !!project.baselineGrid) {
       pagination = lp.result;
     } else {
       pagination = paginate(story, styles, c.w, c.h, (id) => {
         const a = project.assets[id];
         return a && { w: a.pxW, h: a.pxH };
-      });
-      lastPagination = { story, styles, w: c.w, h: c.h, fv, assets: project.assets, result: pagination };
+      }, { grid: project.baselineGrid });
+      lastPagination = { story, styles, w: c.w, h: c.h, fv, assets: project.assets, grid: !!project.baselineGrid, result: pagination };
     }
   }
 
@@ -215,10 +277,13 @@ export function derive(project: Project): Derived {
   });
 
   const pn = project.master?.pageNumber;
+  let counter = pn ? pn.startAt - 1 : 0;
   const labels = project.pages.map((_, i) => {
     if (!pn || i < pn.firstPage - 1) return '';
-    const n = i - (pn.firstPage - 1) + pn.startAt;
-    return pn.format === 'roman' ? roman(n) : String(n);
+    // 장별 쪽 번호: 장이 시작하는 쪽에서 번호를 다시 시작한다
+    const opens = pn.restartPerChapter && flowIndex[i] >= 0 && pagination?.pages[flowIndex[i]]?.[0]?.block.style === 'chapter';
+    counter = opens ? pn.startAt : counter + 1;
+    return pn.format === 'roman' ? roman(counter) : String(counter);
   });
 
   const toc: TocEntry[] = [];
@@ -227,7 +292,7 @@ export function derive(project: Project): Derived {
       if (b.assetId || !b.text.trim()) continue;
       if (b.style !== 'chapter' && !(b.style === 'section' && (project.toc?.includeSections ?? true))) continue;
       const pageIdx = flowToPage[pagination.blockPage.get(b.id) ?? -1];
-      toc.push({ blockId: b.id, level: b.style === 'chapter' ? 0 : 1, text: b.text.replace(/\s+/g, ' ').trim(), label: pageIdx === undefined ? '' : labels[pageIdx] });
+      toc.push({ blockId: b.id, level: b.style === 'chapter' ? 0 : 1, text: plainText(b.text), label: pageIdx === undefined ? '' : labels[pageIdx] });
     }
   }
   const { perFirst, perNext } = tocCapacity(project);
@@ -371,17 +436,18 @@ function masterTexts(project: Project, d: Derived, pageIndex: number): PlacedTex
         }
       }
       const y = Math.max(3, project.margins.top / 2 - lineH / 2);
-      const t = placeLine('hd', text.replace(/\s+/g, ' ').trim(), { ...base, align: outside }, c.x, y, c.w);
+      const t = placeLine('hd', plainText(text), { ...base, align: outside }, c.x, y, c.w);
       if (t) out.push(t);
     }
   }
   return out;
 }
 
-const pageCache = new WeakMap<Project, Map<number, { texts: PlacedText[]; images: PlacedImage[] }>>();
+export interface DerivedPage { texts: PlacedText[]; images: PlacedImage[]; rules: Rect[] }
+const pageCache = new WeakMap<Project, Map<number, DerivedPage>>();
 
 /** 한 쪽에 자동으로 놓이는 내용(본문 흐름, 목차, 쪽 번호, 머리말) */
-export function derivedContent(project: Project, pageIndex: number): { texts: PlacedText[]; images: PlacedImage[] } {
+export function derivedContent(project: Project, pageIndex: number): DerivedPage {
   let map = pageCache.get(project);
   if (!map) pageCache.set(project, (map = new Map()));
   const hit = map.get(pageIndex);
@@ -389,6 +455,7 @@ export function derivedContent(project: Project, pageIndex: number): { texts: Pl
 
   const texts: PlacedText[] = [];
   const images: PlacedImage[] = [];
+  const rules: Rect[] = [];
   const page = project.pages[pageIndex];
   if (page && project.styles) {
     const d = derive(project);
@@ -401,15 +468,26 @@ export function derivedContent(project: Project, pageIndex: number): { texts: Pl
         } else {
           texts.push({
             key: `${fr.block.id}-${i}`, x: c.x + fr.x, y: c.y + fr.y, w: fr.w, h: fr.h, lines: fr.lines, font: fr.font,
-            fontSize: fr.style.fontSize, color: fr.style.color, blockId: fr.block.id,
+            fontBold: fr.fontBold, fontSize: fr.style.fontSize, color: fr.style.color, blockId: fr.block.id,
           });
         }
       });
+      // 각주: 본문 영역 맨 아래에 쌓고, 위에 짧은 구분선을 긋는다
+      const pageNotes = d.pagination.notes[fi] ?? [];
+      if (pageNotes.length) {
+        const laid = pageNotes.map((n) => layoutNote(n, project.styles!.body, c.w));
+        let y = c.y + c.h - laid.reduce((sum, l) => sum + l.layout.fullHeight, 0);
+        rules.push({ x: c.x, y: y - 1.5, w: Math.min(30, c.w / 3), h: 0.12 });
+        laid.forEach((l, i) => {
+          texts.push({ key: `note-${i}`, x: c.x, y, w: c.w, h: l.layout.fullHeight, lines: l.layout.lines, font: l.font, fontSize: l.style.fontSize, color: l.style.color });
+          y += l.layout.fullHeight;
+        });
+      }
     }
     if (d.tocIndex[pageIndex] >= 0) texts.push(...tocTexts(project, d, pageIndex));
     texts.push(...masterTexts(project, d, pageIndex));
   }
-  const r = { texts, images };
+  const r = { texts, images, rules };
   map.set(pageIndex, r);
   return r;
 }

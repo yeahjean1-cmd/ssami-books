@@ -114,9 +114,9 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
       else if (!sel.includes(el.id)) sel = [el.id];
     } else sel = [el.id];
     useStore.setState({ ...at, selection: sel, editingId: null, selectedBlock: null });
-    if (!sel.includes(el.id)) return;
+    if (!sel.includes(el.id) || el.locked) return; // 잠근 요소는 선택만 된다
     const orig: Record<string, Rect> = {};
-    for (const x of page.elements) if (sel.includes(x.id)) orig[x.id] = { x: x.x, y: x.y, w: x.w, h: x.h };
+    for (const x of page.elements) if (sel.includes(x.id) && !x.locked) orig[x.id] = { x: x.x, y: x.y, w: x.w, h: x.h };
     drag.current = { pageId: page.id, mode, startX: e.clientX, startY: e.clientY, orig, moved: false };
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
   };
@@ -153,7 +153,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
       data-page={pageIndex}
       onPointerDown={() => useStore.setState({ ...at, selection: [], editingId: null, selectedBlock: null })}
     >
-      <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id} bleed={bleed} background={background}>
+      <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id} bleed={bleed} background={background} grid>
         {overlay}
         {derivedContent(project, pageIndex).texts.filter((t) => t.blockId && page.kind === 'flow').map((t) => (
           <rect
@@ -166,7 +166,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
             onDoubleClick={() => openManuscript(t.blockId)}
           />
         ))}
-        {page.elements.map((el) => {
+        {page.elements.filter((el) => !el.hidden).map((el) => {
           const selected = active && selection.includes(el.id);
           const overflow = el.type === 'text' && resolveText(el)?.layout.overflow;
           return (
@@ -177,7 +177,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
                 fill="transparent"
                 stroke={selected ? '#8b6f54' : overflow ? '#b5483a' : 'transparent'}
                 strokeWidth={(selected ? 1.25 : 1) / scale}
-                style={{ cursor: 'move' }}
+                style={{ cursor: el.locked ? 'default' : 'move' }}
                 className="el-hit"
                 onPointerDown={(e) => begin(e, el, 'move')}
                 onPointerMove={onMove}
@@ -198,7 +198,7 @@ export function PageStage({ project, pageIndex, scale, cover, bleed = 0, backgro
           );
         })}
         {active && selection.length === 1 && !editing &&
-          page.elements.filter((el) => el.id === selection[0] && !el.rotation).map((el) =>
+          page.elements.filter((el) => el.id === selection[0] && !el.rotation && !el.locked && !el.hidden).map((el) =>
             HANDLES.map((h) => {
               const cx = el.x + (h.includes('w') ? 0 : h.includes('e') ? el.w : el.w / 2);
               const cy = el.y + (h.includes('n') ? 0 : h.includes('s') ? el.h : el.h / 2);
@@ -272,4 +272,24 @@ export function fitZoom(project: Project, el: HTMLElement | null = document.getE
   const zh = (el.clientHeight - 96) / (project.format.height * PX_PER_MM);
   const z = Math.min(zw, zh);
   if (z > 0) useStore.setState({ zoom: Math.max(0.2, Math.min(4, z)) });
+}
+
+/** 공통 요소 보기: 여기에 놓은 배경·장식은 모든 쪽 아래에 깔린다. */
+export function MasterView({ project }: { project: Project }) {
+  const zoom = useStore((s) => s.zoom);
+  const scale = zoom * PX_PER_MM;
+  const doc: Project = {
+    ...project, story: undefined, styles: undefined, master: undefined, masterElements: undefined,
+    pages: [{ id: 'master', kind: 'free', elements: project.masterElements ?? [] }],
+  };
+  return (
+    <div className="canvas" id="canvas" onPointerDown={() => useStore.setState({ selection: [], editingId: null })}>
+      <div className="spread cover-spread">
+        <div>
+          <p className="cover-legend" style={{ marginBottom: 12 }}>공통 요소 — 여기에 놓은 글·이미지·도형은 모든 쪽의 본문 아래에 깔려요. ‘공통 요소 숨기기’를 켠 쪽에는 나오지 않아요.</p>
+          <PageStage project={doc} pageIndex={0} scale={scale} cover bleed={bleedOf(project)} />
+        </div>
+      </div>
+    </div>
+  );
 }
