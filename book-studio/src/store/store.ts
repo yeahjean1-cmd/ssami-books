@@ -4,7 +4,7 @@ import { contentRect, makeBlock, makeImage, makePage, makeText, uid } from '../m
 import { bleedOf, coverGeom, frontRect, fromDisplay, makeCover, toDisplay } from '../model/cover';
 import { templateCopy } from '../model/templates';
 import type { Asset, Block, Cover, Master, Page, PageElement, ParaStyle, Project, Rect, StyleName, TocSettings } from '../model/types';
-import { saveProject } from './storage';
+import { saveProject, saveSnapshot } from './storage';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
 
@@ -69,6 +69,9 @@ export function openProject(project: Project) {
     project: synced, past: [], future: [], currentPage: 0, selection: [], editingId: null, selectedBlock: null,
     centerView: 'pages', focus: null, saveState: synced === project ? 'saved' : 'dirty',
   });
+  // 책을 열 때의 상태를 복원 지점으로 남긴다
+  lastSnapshot = Date.now();
+  saveSnapshot(synced).catch(() => {});
 }
 
 export async function closeProject() {
@@ -136,6 +139,8 @@ function restore(project: Project, past: Project[], future: Project[]) {
 // ---- 자동 저장 ----
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let saving: Promise<void> = Promise.resolve();
+let lastSnapshot = 0;
+const SNAPSHOT_EVERY = 10 * 60 * 1000;
 
 function scheduleSave() {
   clearTimeout(saveTimer);
@@ -150,6 +155,10 @@ export function flushSave(): Promise<void> {
     set({ saveState: 'saving' });
     try {
       await saveProject(project);
+      if (Date.now() - lastSnapshot > SNAPSHOT_EVERY) {
+        lastSnapshot = Date.now();
+        await saveSnapshot(project).catch(() => {});
+      }
       if (get().project === project) set({ saveState: 'saved' });
     } catch (e) {
       console.error(e);

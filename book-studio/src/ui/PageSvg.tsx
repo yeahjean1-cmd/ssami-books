@@ -21,7 +21,13 @@ function Runs({ lines, x0, y0, size }: { lines: Line[]; x0: number; y0: number; 
         line.runs.map((run, j) => {
           const x = x0 + run.x;
           const y = y0 + line.baseline - (run.sup ? SUP_RISE * size : 0);
-          return (
+          const deco = (run.u || run.s) && run.w ? (
+            <g key={`d${i}-${j}`}>
+              {run.u && <rect x={x} y={y + size * 0.13} width={run.w} height={size * 0.055} />}
+              {run.s && <rect x={x} y={y - size * 0.3} width={run.w} height={size * 0.055} />}
+            </g>
+          ) : null;
+          return [deco,
             <text
               key={`${i}-${j}`}
               x={run.i ? 0 : x} y={run.i ? 0 : y}
@@ -29,8 +35,8 @@ function Runs({ lines, x0, y0, size }: { lines: Line[]; x0: number; y0: number; 
               fontWeight={run.b ? 700 : undefined}
               fontSize={run.sup ? size * SUP_SCALE : undefined}
               letterSpacing={run.ls || undefined}
-            >{run.text}</text>
-          );
+            >{run.text}</text>,
+          ];
         }),
       )}
     </>
@@ -108,7 +114,8 @@ export function PageSvg({ project, pageIndex, scale, showGuides, editingId, back
   const drawEl = (el: PageElement, key: string) => el.hidden ? null
     : el.type === 'text' ? <TextView key={key} el={el} hidden={el.id === editingId} fv={fv} />
       : el.type === 'image' ? <ImageView key={key} el={el} project={project} />
-        : <rect key={key} x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill} opacity={el.opacity} transform={rotationOf(el)} />;
+        : el.shape === 'ellipse' ? <ellipse key={key} cx={el.x + el.w / 2} cy={el.y + el.h / 2} rx={el.w / 2} ry={el.h / 2} fill={el.fill} opacity={el.opacity} transform={rotationOf(el)} />
+          : <rect key={key} x={el.x} y={el.y} width={el.w} height={el.h} fill={el.fill} opacity={el.opacity} transform={rotationOf(el)} />;
   const gridH = grid && project.baselineGrid && page.kind === 'flow' && project.styles ? project.styles.body.fontSize * PT_TO_MM * project.styles.body.lineHeight : 0;
   return (
     <svg width={(width + b * 2) * scale} height={(height + b * 2) * scale} viewBox={`${-b} ${-b} ${width + b * 2} ${height + b * 2}`} style={{ display: 'block' }}>

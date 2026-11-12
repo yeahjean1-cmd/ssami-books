@@ -199,6 +199,13 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
             x: (t.x + run.x) * k, y: H - (t.y + line.baseline - rise) * k, size: run.sup ? t.size * SUP_SCALE : t.size, font, color: color(t.color),
             ...(run.i ? { ySkew: degrees(12) } : {}), // 기울임: 글자를 오른쪽으로 12도 눕힌다
           });
+          if ((run.u || run.s) && run.w) {
+            // 밑줄·취소선: 화면과 같은 위치·굵기의 가는 사각형으로 긋는다
+            const sz = t.size * PT_TO_MM;
+            for (const dy of [...(run.u ? [0.13 + 0.055] : []), ...(run.s ? [-0.3 + 0.055] : [])]) {
+              out.drawRectangle({ x: (t.x + run.x) * k, y: H - (t.y + line.baseline + sz * dy) * k, width: run.w * k, height: sz * 0.055 * k, color: color(t.color) });
+            }
+          }
         }
       }
       out.pushOperators(setCharacterSpacing(0));
@@ -214,7 +221,9 @@ export async function exportPdf(project: Project, opts: ExportOptions = {}): Pro
         continue;
       }
       const done = rotated(out, el);
-      if (el.type === 'rect') {
+      if (el.type === 'rect' && el.shape === 'ellipse') {
+        out.drawEllipse({ x: (el.x + el.w / 2) * k, y: H - (el.y + el.h / 2) * k, xScale: (el.w / 2) * k, yScale: (el.h / 2) * k, color: color(el.fill), opacity: el.opacity });
+      } else if (el.type === 'rect') {
         out.drawRectangle({ x: el.x * k, y: H - (el.y + el.h) * k, width: el.w * k, height: el.h * k, color: color(el.fill), opacity: el.opacity });
       } else {
         const asset = src.assets[el.assetId];

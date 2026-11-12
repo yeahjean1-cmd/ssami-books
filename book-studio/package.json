@@ -1,7 +1,7 @@
 {
   "name": "book-studio",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Book Studio — 출판 편집 및 인쇄용 PDF 제작 프로그램",
   "type": "module",
   "scripts": {
@@ -10,11 +10,18 @@
     "preview": "vite preview",
     "test": "vitest run",
     "desktop": "npm run build && electron .",
-    "e2e": "node tests/e2e/run.mjs"
+    "e2e": "node tests/e2e/run.mjs",
+    "dist:win": "npm run build && electron-builder --win --x64"
   },
-  "dependencies": {
+  "devDependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
     "cfb": "^1.2.2",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0",
     "fflate": "^0.8.3",
     "harfbuzzjs": "^1.6.4",
     "jszip": "^3.10.2",
@@ -22,17 +29,42 @@
     "pdf-lib": "^1.17.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "zustand": "^5.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.6.6",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "electron": "^45.3.1",
     "typescript": "^5.6.0",
     "vite": "^7.0.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "zustand": "^5.0.0"
   },
-  "main": "electron/main.cjs"
+  "main": "electron/main.cjs",
+  "author": "Book Studio",
+  "build": {
+    "appId": "app.bookstudio.desktop",
+    "productName": "Book Studio",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Book Studio"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "yeahjean1-cmd",
+        "repo": "ssami-books"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
 }

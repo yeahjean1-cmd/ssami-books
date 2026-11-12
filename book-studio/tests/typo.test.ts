@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { derive, derivedContent, paginate, syncPages } from '../src/engine/flow';
 import { registerFontData, resolveFont } from '../src/engine/fonts';
 import { layoutText, parseMarkup, plainText } from '../src/engine/layout';
+import { importRtf } from '../src/engine/import';
 import { exportPdf } from '../src/engine/pdf';
 import { BODY_STYLE, createProject, makeBlock, uid } from '../src/model/factory';
 import { recommendedMargins } from '../src/model/presets';
@@ -118,5 +119,35 @@ describe('기준선 격자와 장별 쪽 번호', () => {
     const marked = { ...p, story: [...p.story!, makeBlock('body', '**굵게** *기울임* 각주[^끝 각주]')] };
     const bytes = await exportPdf(syncPages(marked, uid), { hbWasm: async () => readFileSync('node_modules/harfbuzzjs/dist/harfbuzz-subset.wasm') });
     expect(bytes.length).toBeGreaterThan(10000);
+  });
+});
+
+describe('밑줄·취소선, 연속 각주 번호, RTF', () => {
+  it('__밑줄__과 ~~취소선~~은 묶음의 폭과 함께 표시된다', () => {
+    const r = layoutText('이것은 __밑줄__이고 ~~지운 글~~이다. snake_case와 a~b는 그대로.', style, 300, 100, fonts, { markup: true });
+    const runs = r.lines[0].runs;
+    expect(runs.map((x) => x.text).join('')).toBe('이것은 밑줄이고 지운 글이다. snake_case와 a~b는 그대로.');
+    const u = runs.find((x) => x.u)!;
+    expect(u.text).toBe('밑줄');
+    expect(u.w).toBeCloseTo(2 * fonts.regular.adv('밑'.codePointAt(0)!) * r.fontSizeMm, 6);
+    expect(runs.find((x) => x.s)!.text).toBe('지운 글');
+  });
+
+  it('각주 번호를 책 전체에 이어 매길 수 있다', () => {
+    const story = Array.from({ length: 24 }, (_, i) => makeBlock('body', para.repeat(4) + `[^${i}번 각주]`));
+    const perPage = paginate(story, styles, 112, 181, () => undefined);
+    const book = paginate(story, styles, 112, 181, () => undefined, { continuousNotes: true });
+    expect(perPage.notes.filter((n) => n.length).every((n) => n[0].n === 1)).toBe(true);
+    expect(book.notes.flat().map((n) => n.n)).toEqual(Array.from({ length: 24 }, (_, i) => i + 1));
+    const marks = book.pages.flat().flatMap((f) => f.lines.flatMap((l) => l.runs.filter((r) => r.fn !== undefined).map((r) => r.text)));
+    expect(marks).toEqual(Array.from({ length: 24 }, (_, i) => String(i + 1)));
+  });
+
+  it('RTF에서 유니코드·완성형 한글을 읽고 글꼴표와 그림은 건너뛴다', () => {
+    const rtf = "{\\rtf1\\ansi\\ansicpg949{\\fonttbl{\\f0 Batang;}}{\\*\\generator X;}\\uc1 \\u51228?1\\u51109? \\'c7\\'d1\\'b1\\'db\\par {\\b Bold} text \\{ok\\}\\par{\\pict 0102}\\ldblquote q\\rdblquote\\par}";
+    const r = importRtf(new TextEncoder().encode(rtf));
+    expect(r.blocks.map((b) => b.text)).toEqual(['제1장 한글', 'Bold text {ok}', '“q”']);
+    expect(r.blocks[0].style).toBe('chapter');
+    expect(() => importRtf(new TextEncoder().encode('plain'))).toThrow();
   });
 });

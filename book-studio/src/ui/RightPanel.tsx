@@ -14,6 +14,7 @@ import {
 } from '../store/store';
 import { NumField, Segmented, pickFile, readFile } from './fields';
 import { NameSave } from './Extras';
+import { Versions } from './Support';
 import { useFontsVersion } from './PageSvg';
 
 async function addUserFont(): Promise<string | null> {
@@ -43,8 +44,7 @@ function Geometry({ el, pageId }: { el: PageElement; pageId: string }) {
         <NumField label="너비" unit="mm" value={round1(el.w)} min={3} step={0.5} onChange={(w) => set({ w }, 'w')} />
         <NumField label="높이" unit="mm" value={round1(el.h)} min={3} step={0.5} onChange={(h) => set({ h }, 'h')} />
       </div>
-      <Segmented label="회전" value={String(el.rotation ?? 0)} onChange={(v) => set({ rotation: Number(v) || undefined }, 'rot')}
-        options={[{ value: '0', label: '0°' }, { value: '90', label: '90°' }, { value: '180', label: '180°' }, { value: '270', label: '270°' }]} />
+      <NumField id="rotation" label="회전" unit="°" value={el.rotation ?? 0} min={-360} max={360} step={1} onChange={(v) => set({ rotation: ((v % 360) + 360) % 360 || undefined }, 'rot')} />
       {!!el.rotation && <p className="hint">돌린 요소는 끌어서 옮길 수 있고, 크기는 위 숫자로 바꿔요.</p>}
       <div className="row">
         <button className="btn" onClick={() => reorderSelection('front')}>맨 앞으로</button>
@@ -227,6 +227,10 @@ function BookDesign({ project }: { project: Project }) {
           본문 줄을 기준선 격자에 맞추기
         </label>
         <p className="hint">격자를 켜면 제목이나 인용문 뒤에도 본문 줄이 같은 높이에 놓여, 펼친 양쪽의 줄이 나란해져요.</p>
+        <label className="check">
+          <input id="notes-book" type="checkbox" checked={project.footnoteNumbering === 'book'} onChange={(e) => mutate((p) => ({ ...p, footnoteNumbering: e.target.checked ? 'book' : undefined }))} />
+          각주 번호를 책 전체에 이어서 매기기
+        </label>
       </section>
       <section>
         <h3>쪽 번호</h3>
@@ -323,6 +327,9 @@ function RectProps({ el, pageId }: { el: RectElement; pageId: string }) {
     <>
       <section>
         <h3>도형</h3>
+        <Segmented label="모양" value={el.shape ?? 'rect'} onChange={(v) => patchElements(pageId, { [el.id]: { shape: v === 'ellipse' ? 'ellipse' : undefined } })}
+          options={[{ value: 'rect', label: '사각형' }, { value: 'ellipse', label: '원' }]} />
+        <button className="btn small" id="make-line" onClick={() => patchElements(pageId, { [el.id]: { shape: undefined, h: 0.3 } })}>가는 선으로 만들기 (0.3mm)</button>
         <label className="field">
           <span>채우기 색</span>
           <div className="field-input color">
@@ -505,6 +512,7 @@ function DocumentProps({ project }: { project: Project }) {
         <p className="hint">여백을 바꾸면 본문은 자동으로 다시 조판돼요. 직접 놓은 글 상자와 이미지는 옮겨지지 않아요.</p>
       </section>
       <PrintSettings project={project} />
+      <Versions project={project} />
     </>
   );
 }

@@ -297,3 +297,11 @@ h2, h3, p { margin: 0; }
 .face.pages.flat { background: repeating-linear-gradient(0deg, #f6f1e7 0 1px, #e9e2d5 1px 2px); left: 1px; }
 #book-preview .modal-foot { align-items: center; }
 #book-preview .modal-foot .hint { max-width: 360px; }
+
+/* Phase 5: 도움말·복구 */
+.guide { display: flex; flex-direction: column; gap: 20px; }
+.guide h3 { font-size: 14px; margin-bottom: 8px; }
+.guide ul { margin: 0 0 8px; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; line-height: 1.65; color: var(--ink-2); }
+.crash { max-width: 560px; display: flex; flex-direction: column; gap: 16px; align-items: center; }
+.crash h2 { font-size: 18px; color: var(--ink); }
+.ms-row { content-visibility: auto; contain-intrinsic-size: auto 44px; }

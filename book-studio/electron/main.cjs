@@ -31,6 +31,28 @@ function createWindow() {
   win.loadURL('app://book-studio/index.html');
 }
 
+// 같은 책을 두 창에서 동시에 고쳐 저장이 엇갈리지 않도록 한 번만 실행한다
+if (!app.requestSingleInstanceLock()) app.quit();
+app.on('second-instance', () => {
+  const [win] = BrowserWindow.getAllWindows();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
+/** 설치된 프로그램에서만 새 버전을 확인한다. 배포 서버(GitHub 릴리스)에 새 판이 없거나 연결이 안 되면 조용히 넘어간다. */
+function checkForUpdates() {
+  if (!app.isPackaged) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.on('error', () => {});
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  } catch {
+    /* 업데이트 모듈이 없으면 건너뛴다 */
+  }
+}
+
 app.whenReady().then(() => {
   protocol.handle('app', (request) => {
     const { pathname } = new URL(request.url);
@@ -39,6 +61,7 @@ app.whenReady().then(() => {
     return net.fetch(pathToFileURL(file).toString());
   });
   createWindow();
+  checkForUpdates();
   app.on('activate', () => BrowserWindow.getAllWindows().length === 0 && createWindow());
 });
 

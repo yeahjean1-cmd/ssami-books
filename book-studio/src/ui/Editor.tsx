@@ -13,6 +13,7 @@ import { pickImageAsset } from './assets';
 import { CoverView } from './CoverView';
 import { Manuscript } from './Manuscript';
 import { ExportDialog, PreflightDialog, usePreflight } from './PrintDialogs';
+import { HelpDialog } from './Support';
 import { PageSvg } from './PageSvg';
 import { RightPanel } from './RightPanel';
 
@@ -112,7 +113,7 @@ export function Editor({ project }: { project: Project }) {
   const s = useStore();
   const canSpread = project.print.duplex;
 
-  const [dialog, setDialog] = useState<'export' | 'preflight' | 'preview' | null>(null);
+  const [dialog, setDialog] = useState<'export' | 'preflight' | 'preview' | 'help' | null>(null);
   const issues = usePreflight(project);
   const errors = issues.filter((i) => i.level === 'error').length;
   const warns = issues.filter((i) => i.level === 'warn').length;
@@ -195,6 +196,7 @@ export function Editor({ project }: { project: Project }) {
         )}
         {project.cover && <button className="btn ghost" id="open-preview" onClick={() => setDialog('preview')}>책 미리보기</button>}
         <div className="spacer" />
+        <button className="btn ghost" id="open-help" onClick={() => setDialog('help')}>도움말</button>
         <button className="btn ghost" id="save-file" onClick={exportProjectFile} title="편집 가능한 프로젝트 파일(.bookstudio)로 내보내요">프로젝트 파일로 저장</button>
         <button className="btn primary" id="export-pdf" onClick={() => setDialog('export')}>PDF 내보내기</button>
       </header>
@@ -237,6 +239,7 @@ export function Editor({ project }: { project: Project }) {
       </footer>
       {dialog === 'export' && <ExportDialog project={project} onClose={() => setDialog(null)} onPreflight={() => setDialog('preflight')} />}
       {dialog === 'preview' && project.cover && <BookPreview project={project} onClose={() => setDialog(null)} />}
+      {dialog === 'help' && <HelpDialog onClose={() => setDialog(null)} />}
       {dialog === 'preflight' && <PreflightDialog project={project} onClose={() => setDialog(null)} />}
     </div>
   );

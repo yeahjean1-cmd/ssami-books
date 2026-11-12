@@ -246,7 +246,66 @@ export async function importHwp(bytes: Uint8Array): Promise<ImportResult> {
   return { format: '한글(HWP)', blocks, warnings };
 }
 
-export const IMPORT_ACCEPT = '.txt,.docx,.hwpx,.hwp';
+const RTF_SKIP = new Set(['fonttbl', 'colortbl', 'stylesheet', 'info', 'pict', 'header', 'footer', 'headerl', 'headerr', 'footerl', 'footerr', 'footnote',
+  'object', 'themedata', 'datastore', 'generator', 'listtable', 'listoverridetable', 'rsidtbl', 'xmlnstbl', 'latentstyles', 'pgdsctbl', 'fldinst']);
+const RTF_CHARS: Record<string, string> = { emdash: '—', endash: '–', lquote: '‘', rquote: '’', ldblquote: '“', rdblquote: '”', bullet: '•', tab: ' ', cell: ' ' };
+
+/** RTF에서 글만 뽑는다. 한글은 유니코드(\\uN) 또는 완성형 바이트(\\'hh)로 들어 있다. */
+export function importRtf(bytes: Uint8Array): ImportResult {
+  const src = new TextDecoder('latin1').decode(bytes);
+  if (!src.startsWith('{\\rtf')) throw new ImportError('RTF 파일이 아니에요.');
+  let out = '';
+  const pending: number[] = [];
+  const flush = () => {
+    if (pending.length) out += new TextDecoder('euc-kr').decode(new Uint8Array(pending));
+    pending.length = 0;
+  };
+  let depth = 0;
+  let skipDepth = -1; // 이 깊이의 묶음이 끝날 때까지 건너뛴다(글꼴표·그림 등)
+  let uc = 1;
+  let skipChars = 0; // \\uN 뒤에 오는 대체 글자
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '{') depth++;
+    else if (c === '}') {
+      if (depth === skipDepth) skipDepth = -1;
+      depth--;
+    } else if (c === '\\') {
+      const n = src[i + 1];
+      if (n === '\\' || n === '{' || n === '}') {
+        if (skipDepth < 0) { flush(); out += n; }
+        i++;
+      } else if (n === "'") {
+        const b = parseInt(src.slice(i + 2, i + 4), 16);
+        i += 3;
+        if (skipChars > 0) skipChars--;
+        else if (skipDepth < 0 && !Number.isNaN(b)) pending.push(b);
+      } else if (n === '*') {
+        if (skipDepth < 0) skipDepth = depth;
+        i++;
+      } else {
+        const m = /^([a-zA-Z]+)(-?\d+)? ?/.exec(src.slice(i + 1, i + 40));
+        if (!m) { i++; continue; }
+        i += m[0].length;
+        if (skipDepth >= 0) continue;
+        const [, word, num] = m;
+        if (RTF_SKIP.has(word)) skipDepth = depth;
+        else if (word === 'par' || word === 'line' || word === 'sect' || word === 'row') { flush(); out += '\n'; }
+        else if (word === 'u' && num) { flush(); out += String.fromCharCode((parseInt(num) + 65536) % 65536); skipChars = uc; }
+        else if (word === 'uc' && num) uc = parseInt(num);
+        else if (RTF_CHARS[word]) { flush(); out += RTF_CHARS[word]; }
+      }
+    } else if (c !== '\r' && c !== '\n' && skipDepth < 0) {
+      if (skipChars > 0) skipChars--;
+      else { flush(); out += c; }
+    }
+  }
+  flush();
+  const blocks = out.split('\n').map(clean).filter(Boolean).map(guessStyle);
+  return { format: 'RTF', blocks, warnings: ['RTF는 글 내용만 가져와요. 글자 서식·그림·표 모양·각주는 가져오지 않고, 제목으로 보이는 줄을 장 제목으로 추정했어요.'] };
+}
+
+export const IMPORT_ACCEPT = '.txt,.docx,.hwpx,.hwp,.rtf';
 
 export async function importManuscript(name: string, bytes: Uint8Array): Promise<ImportResult> {
   const ext = name.toLowerCase().split('.').pop();
@@ -255,9 +314,10 @@ export async function importManuscript(name: string, bytes: Uint8Array): Promise
   else if (ext === 'docx') result = await importDocx(bytes);
   else if (ext === 'hwpx') result = await importHwpx(bytes);
   else if (ext === 'hwp') result = await importHwp(bytes);
-  else if (ext === 'doc' || ext === 'rtf') {
-    throw new ImportError(`${ext.toUpperCase()} 형식은 아직 지원하지 않아요. Word에서 DOCX로 다시 저장해서 가져와 주세요.`);
-  } else throw new ImportError('지원하지 않는 파일 형식이에요. TXT, DOCX, HWPX, HWP 파일을 가져올 수 있어요.');
+  else if (ext === 'rtf') result = importRtf(bytes);
+  else if (ext === 'doc') {
+    throw new ImportError('예전 Word 형식(DOC)은 지원하지 않아요. Word에서 DOCX로 다시 저장해서 가져와 주세요.');
+  } else throw new ImportError('지원하지 않는 파일 형식이에요. TXT, DOCX, HWPX, HWP, RTF 파일을 가져올 수 있어요.');
   if (!result.blocks.length) throw new ImportError('파일에서 글을 찾지 못했어요.');
   return result;
 }

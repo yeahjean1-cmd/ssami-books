@@ -29,6 +29,11 @@ export interface Run {
   sup?: boolean;
   /** 각주 번호 자리: 문단 안에서 몇 번째 각주인지 */
   fn?: number;
+  /** 밑줄 / 취소선 */
+  u?: boolean;
+  s?: boolean;
+  /** 묶음의 폭 mm (밑줄·취소선을 긋는 데 쓴다) */
+  w?: number;
 }
 
 export interface Line {
@@ -87,11 +92,13 @@ function canBreak(a: string, b: string, mode: 'char' | 'word'): boolean {
 const BOLD = 1;
 const ITALIC = 2;
 const SUP = 4;
+const UNDER = 8;
+const STRIKE = 16;
 
 interface Parsed { chars: string[]; flags: number[]; fn: (number | undefined)[]; notes: string[] }
 
 /**
- * 글 안의 간단한 표시를 해석한다: **굵게**, *기울임*, [^각주 내용].
+ * 글 안의 간단한 표시를 해석한다: **굵게**, *기울임*, __밑줄__, ~~취소선~~, [^각주 내용].
  * 짝이 맞지 않는 별표는 글자 그대로 둔다.
  */
 export function parseMarkup(text: string): Parsed {
@@ -99,6 +106,12 @@ export function parseMarkup(text: string): Parsed {
   const out: Parsed = { chars: [], flags: [], fn: [], notes: [] };
   let bold = false;
   let italic = false;
+  let under = false;
+  let strike = false;
+  const later = (from: number, c: string) => {
+    for (let j = from; j < src.length && src[j] !== '\n'; j++) if (src[j] === c && src[j + 1] === c) return true;
+    return false;
+  };
   const closes = (from: number, double: boolean) => {
     for (let j = from; j < src.length && src[j] !== '\n'; j++) {
       if (src[j] !== '*') continue;
@@ -112,7 +125,15 @@ export function parseMarkup(text: string): Parsed {
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
     if (ch === '\n') {
-      bold = italic = false;
+      bold = italic = under = strike = false;
+    } else if ((ch === '_' || ch === '~') && src[i + 1] === ch) {
+      const on = ch === '_' ? under : strike;
+      if (on || later(i + 2, ch)) {
+        if (ch === '_') under = !under;
+        else strike = !strike;
+        i++;
+        continue;
+      }
     } else if (ch === '*' && src[i + 1] === '*') {
       if (bold || closes(i + 2, true)) {
         bold = !bold;
@@ -137,7 +158,7 @@ export function parseMarkup(text: string): Parsed {
       }
     }
     out.chars.push(ch);
-    out.flags.push((bold ? BOLD : 0) | (italic ? ITALIC : 0));
+    out.flags.push((bold ? BOLD : 0) | (italic ? ITALIC : 0) | (under ? UNDER : 0) | (strike ? STRIKE : 0));
     out.fn.push(undefined);
   }
   return out;
@@ -167,7 +188,7 @@ export function layoutText(
 
   const clean = text.replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
   let parsed: Parsed;
-  if (opts.markup && /\*|\[\^/.test(clean)) parsed = parseMarkup(clean);
+  if (opts.markup && /\*|\[\^|__|~~/.test(clean)) parsed = parseMarkup(clean);
   else {
     const chars = Array.from(clean);
     parsed = { chars, flags: [], fn: [], notes: [] };
@@ -249,6 +270,8 @@ export function layoutText(
           if (f & BOLD && canBold) run.b = true;
           if (f & ITALIC) run.i = true;
           if (f & SUP) run.sup = true;
+          if (f & UNDER) run.u = true;
+          if (f & STRIKE) run.s = true;
           if (fnIdx !== undefined) {
             run.fn = fnIdx;
             (notes ??= []).push(fnIdx);
@@ -258,6 +281,7 @@ export function layoutText(
         }
         run.text += chars[k];
         x += adv[k] + lineLs;
+        if (run.u || run.s) run.w = x - run.x - lineLs;
         if (spaceAdd && isSpace(chars[k])) {
           x += spaceAdd;
           run = null; // 벌어진 공백 뒤는 새 묶음으로 시작한다

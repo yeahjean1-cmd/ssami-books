@@ -116,12 +116,13 @@ export function paginate(
   frameW: number,
   frameH: number,
   imageSize: (assetId: string) => { w: number; h: number } | undefined,
-  opts: { grid?: boolean } = {},
+  opts: { grid?: boolean; continuousNotes?: boolean } = {},
 ): Pagination {
   const pages: Fragment[][] = [];
   const notes: Note[][] = [];
   let pageNotes: Note[] = [];
   let notesH = 0; // 이 쪽 각주가 차지하는 높이(간격 포함)
+  let noteNo = 0; // 책 전체에 이어 매길 때의 각주 번호
   const blockPage = new Map<string, number>();
   const missingFonts = new Set<string>();
   let page: Fragment[] = [];
@@ -174,7 +175,7 @@ export function paginate(
       // 각주가 있는 줄은 각주가 같은 쪽 아래에 들어갈 자리까지 함께 따진다
       let fit = 0;
       let addH = 0;
-      let count = pageNotes.length;
+      let count = opts.continuousNotes ? noteNo : pageNotes.length;
       for (; fit < left; fit++) {
         let h = 0;
         for (const idx of lines[start + fit].notes ?? []) h += layoutNote({ n: ++count, text: layout.notes[idx] }, styles.body, frameW).layout.fullHeight;
@@ -211,7 +212,7 @@ export function paginate(
         // 각주 번호는 쪽마다 1부터 매긴다
         moved.runs = l.runs.map((r) => {
           if (r.fn === undefined) return r;
-          const note = { n: pageNotes.length + 1, text: layout.notes[r.fn] };
+          const note = { n: opts.continuousNotes ? ++noteNo : pageNotes.length + 1, text: layout.notes[r.fn] };
           if (!pageNotes.length) notesH += NOTE_GAP;
           pageNotes.push(note);
           notesH += layoutNote(note, styles.body, frameW).layout.fullHeight;
@@ -241,7 +242,8 @@ function roman(n: number): string {
   return out;
 }
 
-let lastPagination: { story: Block[]; styles: unknown; w: number; h: number; fv: number; assets: unknown; grid: boolean; result: Pagination } | null = null;
+let lastPagination: { story: Block[]; styles: unknown; w: number; h: number; fv: number; assets: unknown; grid: number; result: Pagination } | null = null;
+const flowMode = (p: Project) => (p.baselineGrid ? 1 : 0) + (p.footnoteNumbering === 'book' ? 2 : 0);
 const derivedCache = new WeakMap<Project, Derived>();
 
 /** 원고에서 파생되는 정보(쪽 나눔, 쪽 번호, 목차)를 계산한다. */
@@ -254,14 +256,14 @@ export function derive(project: Project): Derived {
     const c = contentRect(project, 0);
     const fv = fontsVersion();
     const lp = lastPagination;
-    if (lp && lp.story === story && lp.styles === styles && lp.w === c.w && lp.h === c.h && lp.fv === fv && lp.assets === project.assets && lp.grid === !!project.baselineGrid) {
+    if (lp && lp.story === story && lp.styles === styles && lp.w === c.w && lp.h === c.h && lp.fv === fv && lp.assets === project.assets && lp.grid === flowMode(project)) {
       pagination = lp.result;
     } else {
       pagination = paginate(story, styles, c.w, c.h, (id) => {
         const a = project.assets[id];
         return a && { w: a.pxW, h: a.pxH };
-      }, { grid: project.baselineGrid });
-      lastPagination = { story, styles, w: c.w, h: c.h, fv, assets: project.assets, grid: !!project.baselineGrid, result: pagination };
+      }, { grid: project.baselineGrid, continuousNotes: project.footnoteNumbering === 'book' });
+      lastPagination = { story, styles, w: c.w, h: c.h, fv, assets: project.assets, grid: flowMode(project), result: pagination };
     }
   }
 

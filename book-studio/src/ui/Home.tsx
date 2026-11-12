@@ -4,6 +4,7 @@ import { createProject, makeBlock, parseProjectFile, uid, type NewProjectInput }
 import { STYLE_LABEL, TEMPLATES } from '../model/templates';
 import type { Asset, Block } from '../model/types';
 import { assetFromDataUrl } from './assets';
+import { HelpDialog } from './Support';
 import { CUSTOM_PRESET_ID, FORMAT_PRESETS, presetName, recommendedMargins } from '../model/presets';
 import { deleteProject, listProjects, loadProject, saveProject, type ProjectSummary } from '../store/storage';
 import { notify, openProject } from '../store/store';
@@ -252,6 +253,7 @@ export function Home() {
   const [wizard, setWizard] = useState(false);
   const [imported, setImported] = useState<Imported | null>(null);
   const [importing, setImporting] = useState(false);
+  const [help, setHelp] = useState(false);
   const [fromImport, setFromImport] = useState(false);
   const refresh = () => listProjects().then(setList, () => setList([]));
   useEffect(() => { refresh(); }, []);
@@ -262,7 +264,7 @@ export function Home() {
     else notify('프로젝트를 찾을 수 없어요.', 'error');
   };
   const importFile = async () => {
-    const file = await pickFile(IMPORT_ACCEPT + ',.doc,.rtf');
+    const file = await pickFile(IMPORT_ACCEPT + ',.doc');
     if (!file) return;
     setImporting(true);
     try {
@@ -288,10 +290,11 @@ export function Home() {
         <p>원고에서 인쇄용 PDF까지, 한 권의 책을 만드는 곳</p>
       </header>
       <main>
-        <p className="home-formats">원고 가져오기: TXT · Word(DOCX) · 한글(HWPX, HWP)</p>
+        <p className="home-formats">원고 가져오기: TXT · Word(DOCX) · 한글(HWPX, HWP) · RTF</p>
         <div className="home-actions">
           <button className="btn primary large" id="new-book" onClick={() => setWizard(true)}>새 책 만들기</button>
           <button className="btn large" id="import-file" disabled={importing} onClick={importFile}>{importing ? '원고를 읽는 중…' : '원고 가져오기'}</button>
+          <button className="btn large ghost" id="open-help" onClick={() => setHelp(true)}>사용 안내</button>
           <button className="btn large" id="open-file" onClick={() => openFromFile(refresh)}>프로젝트 파일 열기</button>
         </div>
         <h2>최근 프로젝트</h2>
@@ -314,6 +317,7 @@ export function Home() {
           ))}
         </div>
       </main>
+      {help && <HelpDialog onClose={() => setHelp(false)} />}
       {wizard && <Wizard onClose={() => { setWizard(false); setFromImport(false); setImported(null); }} imported={fromImport && imported ? imported : undefined} />}
       {imported && !wizard && (
         <ImportPreview imported={imported} onCancel={() => setImported(null)} onNext={() => { setFromImport(true); setWizard(true); }} />

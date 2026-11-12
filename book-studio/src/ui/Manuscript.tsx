@@ -87,7 +87,7 @@ export function Manuscript({ project }: { project: Project }) {
       <div className="ms-sheet">
         <p className="hint ms-help">
           Enter로 문단을 나누고, 문단 맨 앞에서 Backspace로 앞 문단과 합쳐요. 왼쪽에서 문단 종류를 고르면 책 디자인이 자동으로 적용돼요.<br />
-          글자 서식: <b>**굵게**</b>(Ctrl+B) · <i>*기울임*</i>(Ctrl+I) · 각주는 <code>[^각주 내용]</code>을 넣은 자리에 번호가 붙고, 내용은 그 쪽 아래에 놓여요.
+          글자 서식: <b>**굵게**</b>(Ctrl+B) · <i>*기울임*</i>(Ctrl+I) · <u>__밑줄__</u> · <s>~~취소선~~</s> · 각주는 <code>[^각주 내용]</code>을 넣은 자리에 번호가 붙고, 내용은 그 쪽 아래에 놓여요.
         </p>
         {story.map((b) => {
           const active = focus?.id === b.id;

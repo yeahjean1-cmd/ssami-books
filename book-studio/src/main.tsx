@@ -5,6 +5,7 @@ import { listFonts } from './store/storage';
 import { useStore } from './store/store';
 import { Editor } from './ui/Editor';
 import { Home } from './ui/Home';
+import { ErrorBoundary, recordError } from './ui/Support';
 import './styles.css';
 
 function App() {
@@ -36,4 +37,8 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
+// 처리되지 않은 오류는 이 기기에만 기록해 두었다가 진단 정보로 저장할 수 있게 한다
+window.addEventListener('error', (e) => recordError(e.error ?? e.message));
+window.addEventListener('unhandledrejection', (e) => recordError(e.reason));
+
+createRoot(document.getElementById('root')!).render(<StrictMode><ErrorBoundary><App /></ErrorBoundary></StrictMode>);

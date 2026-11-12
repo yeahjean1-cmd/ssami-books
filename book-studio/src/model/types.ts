@@ -57,6 +57,8 @@ export interface ImageElement extends BaseElement {
 
 export interface RectElement extends BaseElement {
   type: 'rect';
+  /** 모양 (기본: 사각형) */
+  shape?: 'ellipse';
   /** #RRGGBB */
   fill: string;
   opacity: number;
@@ -204,6 +206,8 @@ export interface Project {
   masterElements?: PageElement[];
   /** 본문 줄을 기준선 격자에 맞춘다: 좌우 쪽의 줄 높이가 나란해진다 */
   baselineGrid?: boolean;
+  /** 각주 번호: 쪽마다 1부터(기본) 또는 책 전체에 이어서 */
+  footnoteNumbering?: 'page' | 'book';
 }
 
 export interface Rect {
