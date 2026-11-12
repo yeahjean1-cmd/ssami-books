@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import hbWasmUrl from 'harfbuzzjs/dist/harfbuzz-subset.wasm?url';
-import { browserRasterize, exportPdf } from '../engine/pdf';
-import { resolveText } from '../engine/render';
 import { derive } from '../engine/flow';
 import { presetName } from '../model/presets';
 import type { Project } from '../model/types';
 import { downloadBlob, safeFilename } from '../store/storage';
 import {
-  addImage, addPage, addTextBox, addTocPage, openManuscript, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
+  addImage, addPage, addRect, addTextBox, addTocPage, openManuscript, surface, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
   movePage, mutate, notify, pasteClipboard, patchElements, redo, selectPage, undo, useStore,
 } from '../store/store';
 import { Canvas, fitZoom } from './Canvas';
 import { pickImageAsset } from './assets';
+import { CoverView } from './CoverView';
 import { Manuscript } from './Manuscript';
+import { ExportDialog, PreflightDialog, usePreflight } from './PrintDialogs';
 import { PageSvg } from './PageSvg';
 import { RightPanel } from './RightPanel';
 
@@ -105,37 +104,13 @@ const SAVE_LABEL = { saved: '저장됨', dirty: '저장 대기 중…', saving: 
 
 export function Editor({ project }: { project: Project }) {
   const s = useStore();
-  const [exporting, setExporting] = useState(false);
   const canSpread = project.print.duplex;
 
-  const doExportPdf = async () => {
-    setExporting(true);
-    try {
-      const missing = new Set<string>();
-      let overflow = 0;
-      derive(project).pagination?.missingFonts.forEach((f) => missing.add(f));
-      for (const pg of project.pages) for (const el of pg.elements) if (el.type === 'text') {
-        const r = resolveText(el);
-        if (r?.missingFont) missing.add(el.style.fontFamily);
-        if (r?.layout.overflow) overflow++;
-      }
-      const bytes = await exportPdf(project, {
-        rasterize: browserRasterize,
-        hbWasm: async () => (await fetch(hbWasmUrl)).arrayBuffer(),
-      });
-      downloadBlob(new Blob([bytes as BlobPart], { type: 'application/pdf' }), `${safeFilename(project.meta.title)}.pdf`);
-      const notes = [
-        missing.size ? `없는 폰트(${[...missing].join(', ')})는 기본 서체로 대체했어요.` : '',
-        overflow ? `글이 넘친 상자가 ${overflow}개 있어요.` : '',
-      ].filter(Boolean);
-      notify(notes.length ? `PDF를 만들었어요. ${notes.join(' ')}` : 'PDF를 만들었어요.', notes.length ? 'error' : 'info');
-    } catch (e) {
-      console.error(e);
-      notify(`PDF를 만들지 못했어요. ${e instanceof Error ? e.message : ''}`, 'error');
-    } finally {
-      setExporting(false);
-    }
-  };
+  const [dialog, setDialog] = useState<'export' | 'preflight' | null>(null);
+  const issues = usePreflight(project);
+  const errors = issues.filter((i) => i.level === 'error').length;
+  const warns = issues.filter((i) => i.level === 'warn').length;
+  const canPlace = s.centerView === 'pages' || (s.centerView === 'cover' && !!project.cover);
 
   const exportProjectFile = () => {
     downloadBlob(new Blob([JSON.stringify(project)], { type: 'application/json' }), `${safeFilename(project.meta.title)}.bookstudio`);
@@ -162,7 +137,7 @@ export function Editor({ project }: { project: Project }) {
       else if (mod && key === 'd') { e.preventDefault(); copySelection(); pasteClipboard(); }
       else if (mod && key === 'a') {
         e.preventDefault();
-        useStore.setState({ selection: st.project!.pages[st.currentPage].elements.map((x) => x.id) });
+        useStore.setState({ selection: surface().elements.map((x) => x.id) });
       }
       else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection();
       else if (e.key === 'Escape') useStore.setState({ selection: [], selectedBlock: null });
@@ -173,8 +148,8 @@ export function Editor({ project }: { project: Project }) {
         const d = e.shiftKey ? 5 : 0.5;
         const dx = e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0;
         const dy = e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0;
-        const pg = st.project!.pages[st.currentPage];
-        patchElements(pg.id, Object.fromEntries(pg.elements.filter((x) => st.selection.includes(x.id))
+        const pg = surface();
+        patchElements(pg.pageId, Object.fromEntries(pg.elements.filter((x) => st.selection.includes(x.id))
           .map((x) => [x.id, { x: x.x + dx, y: x.y + dy }])), { coalesce: 'nudge' });
       }
     };
@@ -200,23 +175,26 @@ export function Editor({ project }: { project: Project }) {
           <button className="btn ghost" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)">다시 실행</button>
         </div>
         <div className="group">
-          <button className="btn" id="add-text" disabled={s.centerView !== 'pages'} onClick={addTextBox}>글 상자</button>
-          <button className="btn" id="add-image" disabled={s.centerView !== 'pages'} onClick={insertImage}>이미지</button>
+          <button className="btn" id="add-text" disabled={!canPlace} onClick={addTextBox}>글 상자</button>
+          <button className="btn" id="add-image" disabled={!canPlace} onClick={insertImage}>이미지</button>
+          <button className="btn" id="add-rect" disabled={!canPlace} onClick={addRect}>도형</button>
         </div>
-        {project.story && (
+        {(
           <div className="segmented small" id="view-switch">
-            <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null })}>페이지</button>
-            <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고</button>
+            <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null, selection: [], editingId: null })}>페이지</button>
+            {project.story && <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고</button>}
+            <button className={s.centerView === 'cover' ? 'on' : ''} id="view-cover" onClick={() => useStore.setState({ centerView: 'cover', selection: [], editingId: null, selectedBlock: null, focus: null })}>표지</button>
           </div>
         )}
         <div className="spacer" />
         <button className="btn ghost" id="save-file" onClick={exportProjectFile} title="편집 가능한 프로젝트 파일(.bookstudio)로 내보내요">프로젝트 파일로 저장</button>
-        <button className="btn primary" id="export-pdf" disabled={exporting} onClick={doExportPdf}>{exporting ? 'PDF 만드는 중…' : 'PDF 내보내기'}</button>
+        <button className="btn primary" id="export-pdf" onClick={() => setDialog('export')}>PDF 내보내기</button>
       </header>
 
       <div className="workspace">
         <Thumbnails project={project} />
-        {s.centerView === 'manuscript' && project.story ? <Manuscript project={project} /> : <Canvas project={project} />}
+        {s.centerView === 'manuscript' && project.story ? <Manuscript project={project} />
+          : s.centerView === 'cover' ? <CoverView project={project} /> : <Canvas project={project} />}
         <RightPanel project={project} />
       </div>
 
@@ -232,7 +210,13 @@ export function Editor({ project }: { project: Project }) {
             <button className={s.viewMode === 'spread' ? 'on' : ''} onClick={() => { useStore.setState({ viewMode: 'spread' }); fitZoom(project); }}>펼침면</button>
           </div>
         )}
+        {s.centerView === 'pages' && (
+          <label className="check"><input id="show-bleed" type="checkbox" checked={s.showBleed} onChange={(e) => useStore.setState({ showBleed: e.target.checked })} />도련 보기</label>
+        )}
         <div className="spacer" />
+        <button className={`preflight-chip small ${errors ? 'error' : warns ? 'warn' : 'ok'}`} id="preflight-status" onClick={() => setDialog('preflight')} title="인쇄 사전 검사 결과 보기">
+          사전 검사 · 오류 {errors} · 경고 {warns}
+        </button>
         <span>{presetName(project.format.presetId)} {project.format.width} × {project.format.height}mm</span>
         <div className="group">
           <button className="btn ghost small" onClick={() => useStore.setState({ zoom: Math.max(0.2, s.zoom / 1.2) })} aria-label="축소">−</button>
@@ -243,6 +227,8 @@ export function Editor({ project }: { project: Project }) {
         </div>
         <span id="save-status" className={`save ${s.saveState}`}>{SAVE_LABEL[s.saveState]}</span>
       </footer>
+      {dialog === 'export' && <ExportDialog project={project} onClose={() => setDialog(null)} onPreflight={() => setDialog('preflight')} />}
+      {dialog === 'preflight' && <PreflightDialog project={project} onClose={() => setDialog(null)} />}
     </div>
   );
 }

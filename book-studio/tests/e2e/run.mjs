@@ -132,7 +132,9 @@ await page.click('#undo');
 assert(await pageCount() === total, '템플릿 적용도 실행 취소 가능');
 
 // PDF: 쪽수, 차례의 쪽 번호와 실제 위치
-const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#export-pdf')]);
+await page.click('#export-pdf');
+assert(await page.isDisabled('#ex-cover'), '표지가 없으면 표지 내보내기는 꺼져 있음');
+const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#ex-run')]);
 await dl.saveAs(f('book.pdf'));
 const info = execSync(`pdfinfo "${f('book.pdf')}"`).toString();
 assert(parseInt(/Pages:\s+(\d+)/.exec(info)[1]) === total, `PDF 쪽수 = 편집 화면 쪽수 (${total})`);
@@ -188,6 +190,119 @@ fs.writeFileSync(f('bad.docx'), 'not a docx');
 await pick('#import-file', f('bad.docx'));
 await page.waitForSelector('.toast.error');
 assert((await page.textContent('.toast.error')).includes('Word 파일을 읽지 못했어요'), '손상된 파일은 오류로 안내');
+
+await page.waitForSelector('.toast.error', { state: 'detached', timeout: 10000 });
+
+console.log('6. 표지와 책등');
+await page.locator('.project-card', { hasText: '32쪽' }).first().locator('.cover').click();
+await page.waitForSelector('.editor');
+await page.click('#view-cover');
+await page.waitForSelector('#cover-empty');
+await page.screenshot({ path: f('8-cover-empty.png') });
+await page.click('#cover-empty [data-cover-template="band"]');
+await page.waitForSelector('#cover-size');
+assert((await page.textContent('#cover-size')).includes('책등 1.6mm'), '책등 자동 계산: 32쪽 ÷ 2 × 0.1mm = 1.6mm');
+assert((await page.textContent('#cover-size')).includes('305.6 × 225'), '표지 펼친 크기 = 뒤표지 + 책등 + 앞표지');
+await page.selectOption('#paper', 'elight80');
+assert((await page.textContent('#spine-calc')).startsWith('2.1mm'), '종이를 바꾸면 책등 다시 계산 (0.13mm → 2.1mm)');
+const titleBox = async () => (await page.locator('.page-stage .el-hit').nth(1).boundingBox());
+const stageBox = async () => (await page.locator('.page-stage svg').first().boundingBox());
+const t0 = await titleBox(); const s0 = await stageBox();
+await page.check('#spine-manual');
+await page.fill('#spine-override', '12');
+assert((await page.textContent('#cover-size')).includes('책등 12mm') && (await page.textContent('#cover-size')).includes('316 × 225'), '인쇄소 책등 값 직접 입력 → 표지 크기 변경');
+const t1 = await titleBox(); const s1 = await stageBox();
+const mmPx = s1.width / (316 + 6);
+assert(Math.abs((s1.x + s1.width - (t1.x + t1.width)) / mmPx - (s0.x + s0.width - (t0.x + t0.width)) / (s0.width / (306.1 + 6))) < 0.3, '책등이 넓어져도 앞표지 제목은 앞표지 안 같은 자리에 있음');
+
+// 표지 요소 편집
+await page.locator('.page-stage .el-hit').nth(1).dblclick();
+await page.locator('.text-editor').fill('느리게 걷는 마음');
+await page.click('#canvas', { position: { x: 5, y: 5 } });
+await page.click('#add-rect');
+assert(await page.locator('#rect-fill').count() === 1, '표지에 도형 추가');
+await page.keyboard.press('Delete');
+await page.screenshot({ path: f('9-cover.png') });
+
+console.log('7. 사전 검사');
+await page.fill('#spine-override', '3');
+await page.click('#preflight-status');
+await page.waitForSelector('#preflight');
+const spineIssue = page.locator('.issue', { hasText: '책등이 3mm로 좁아요' });
+assert(await spineIssue.count() === 1, '좁은 책등에 놓인 글자를 경고');
+await page.screenshot({ path: f('10-preflight.png') });
+await spineIssue.click();
+assert(await page.locator('#preflight').count() === 0 && await page.locator('#font-size').count() === 1, '검사 항목을 누르면 표지의 해당 요소가 선택됨');
+await page.click('#canvas', { position: { x: 5, y: 5 } });
+await page.fill('#spine-override', '12');
+// 내지: 글 넘침 오류 → 해당 쪽으로 이동
+await page.click('#view-pages');
+await page.click('.thumb[data-index="0"]');
+await page.click('#add-text');
+await page.locator('.text-editor').fill(Array(30).fill(para).join('\n'));
+await page.click('#canvas', { position: { x: 5, y: 5 } });
+await page.click('.thumb[data-index="2"]');
+assert((await page.textContent('#preflight-status')).includes('오류 1'), '상태 표시줄에 오류 수 표시');
+await page.click('#preflight-status');
+await page.locator('.issue.error').first().click();
+assert((await page.textContent('#page-status')).startsWith('1 /') && await page.locator('#overflow-notice').count() === 1, '오류 항목을 누르면 그 쪽으로 이동하고 요소가 선택됨');
+await page.keyboard.press('Delete');
+assert((await page.textContent('#preflight-status')).includes('오류 0'), '고치면 오류가 사라짐');
+const w0 = (await page.locator('.page-stage.active svg').boundingBox()).width;
+await page.check('#show-bleed');
+assert((await page.locator('.page-stage.active svg').boundingBox()).width > w0 * 1.02, '내지에서 도련 영역 보기');
+await page.uncheck('#show-bleed');
+
+console.log('8. 인쇄용 PDF');
+const downloads = [];
+page.on('download', (d) => downloads.push(d));
+const exportAll = async (prefix) => {
+  downloads.length = 0;
+  await page.click('#ex-run');
+  await page.waitForSelector('#export-dialog', { state: 'detached', timeout: 60000 });
+  for (let i = 0; i < 50 && downloads.length < 2; i++) await page.waitForTimeout(100);
+  // 내지 → 표지 순서로 내려받는다. (이 시험용 브라우저는 한글 파일 이름을 'download'로 바꾸므로 순서로 구분한다)
+  const files = {};
+  for (const [i, d] of downloads.entries()) { const key = i === 0 ? 'interior' : 'cover'; const to = f(`${prefix}${key}.pdf`); await d.saveAs(to); files[key] = { to }; }
+  return files;
+};
+const boxes = (file) => execSync(`pdfinfo -box "${file}"`).toString();
+const pt = (v) => (v * 72) / 25.4;
+await page.click('#export-pdf');
+await page.click('#export-dialog [data-preset="print"]');
+assert(await page.isDisabled('#ex-pdfx'), '출력 프로파일이 없으면 PDF/X-4를 고를 수 없음');
+const printed = await exportAll('print-');
+assert(printed.cover && printed.interior, '내지와 표지를 각각의 파일로 내보냄');
+const cb = boxes(printed.cover.to);
+const trim = /TrimBox:\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(cb).slice(1).map(Number);
+const bleedB = /BleedBox:\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/.exec(cb).slice(1).map(Number);
+assert(Math.abs(trim[2] - trim[0] - pt(316)) < 0.1 && Math.abs(trim[3] - trim[1] - pt(225)) < 0.1, '표지 PDF의 재단 크기 = 316 × 225mm');
+assert(Math.abs(trim[0] - bleedB[0] - pt(3)) < 0.1, '도련 3mm');
+const ib = boxes(printed.interior.to);
+assert(/Pages:\s+32/.test(ib) && Math.abs(parseFloat(/TrimBox:\s+[\d.]+\s+[\d.]+\s+([\d.]+)/.exec(ib)[1]) - parseFloat(/TrimBox:\s+([\d.]+)/.exec(ib)[1]) - pt(152)) < 0.1, '내지 PDF: 32쪽, 재단 크기 152mm');
+execSync(`pdftoppm -r 60 -png "${printed.cover.to}" "${f('print-cover')}"`);
+
+// 인쇄소 출력 프로파일 → PDF/X-4
+const icc = fs.readFileSync('tests/fixtures/CGATS001Compat-v2-micro.icc');
+fs.writeFileSync(f('not-output.icc'), icc);
+const prtr = Buffer.from(icc); prtr.write('prtr', 12, 'latin1');
+fs.writeFileSync(f('printer.icc'), prtr);
+await pick('#load-profile', f('not-output.icc'));
+await page.waitForSelector('.toast.error');
+assert((await page.textContent('#profile-name')) === '없음', '출력 장치용이 아닌 프로파일은 거부');
+await pick('#load-profile', f('printer.icc'));
+await page.waitForFunction(() => document.querySelector('#profile-name')?.textContent !== '없음');
+await page.click('#export-pdf');
+await page.click('#export-dialog [data-preset="print"]');
+assert(await page.isChecked('#ex-pdfx'), '프로파일을 불러오면 PDF/X-4 사용 가능');
+const x4 = await exportAll('x4-');
+const raw = fs.readFileSync(x4.interior.to).toString('latin1');
+assert(raw.includes('/GTS_PDFXVersion (PDF/X-4)') && raw.includes('/OutputIntents') && raw.includes('/DefaultRGB'), 'PDF/X-4 정보(버전, 출력 인텐트, RGB 색 공간)가 들어감');
+assert(/Pages:\s+32/.test(execSync(`pdfinfo "${x4.interior.to}"`).toString()) && execSync(`pdftotext -f 3 -l 3 "${x4.interior.to}" -`).toString().includes('프롤로그'), 'PDF/X-4 파일이 정상적으로 열리고 글이 들어 있음');
+await page.click('#export-pdf');
+await page.click('#export-dialog [data-preset="proof"]');
+const proof = await exportAll('proof-');
+assert(/TrimBox/.test(boxes(proof.interior.to)) && !fs.readFileSync(proof.interior.to).toString('latin1').includes('GTS_PDFX'), '검수용 PDF: 도련·재단선 포함, PDF/X 정보 없음');
 
 assert(errors.filter((e) => !e.includes('zip')).length === 0, '콘솔 오류 없음 ' + errors.join(' | '));
 await browser.close();

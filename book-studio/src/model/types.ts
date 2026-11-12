@@ -29,6 +29,10 @@ interface BaseElement {
   y: number;
   w: number;
   h: number;
+  /** 가운데를 중심으로 한 회전(도, 시계 방향) */
+  rotation?: number;
+  /** 표지 전용: 책등에 놓인 요소. x는 책등 가운데 기준이다. */
+  spine?: boolean;
 }
 
 export interface TextElement extends BaseElement {
@@ -47,7 +51,40 @@ export interface ImageElement extends BaseElement {
   opacity: number;
 }
 
-export type PageElement = TextElement | ImageElement;
+export interface RectElement extends BaseElement {
+  type: 'rect';
+  /** #RRGGBB */
+  fill: string;
+  opacity: number;
+}
+
+export type PageElement = TextElement | ImageElement | RectElement;
+
+export type BindingType = 'perfect' | 'saddle';
+
+/**
+ * 표지. 뒤표지·책등·앞표지(와 날개)를 하나로 이어 편집한다.
+ * 요소의 x는 책등을 뺀 좌표(0 = 뒤표지와 앞표지가 맞닿는 선)로 저장하므로,
+ * 쪽수가 바뀌어 책등 너비가 달라져도 앞·뒤표지의 요소는 제자리를 지킨다.
+ */
+export interface Cover {
+  background: string;
+  elements: PageElement[];
+  /** 날개 너비 mm (0 = 날개 없음) */
+  flap: number;
+  /** 내지 종이 한 장의 두께 mm */
+  paperId: string;
+  paperThickness: number;
+  /** 인쇄소가 알려 준 책등 너비 mm. 있으면 계산값 대신 쓴다. */
+  spineOverride?: number;
+}
+
+/** 인쇄소가 제공한 CMYK 출력 프로파일 */
+export interface OutputProfile {
+  name: string;
+  /** base64 */
+  data: string;
+}
 
 /**
  * free: 자유 배치 쪽 / flow: 원고가 자동으로 흘러 들어가는 본문 쪽 / toc: 자동 목차 쪽.
@@ -139,7 +176,14 @@ export interface Project {
   meta: { title: string; subtitle: string; author: string; publisher: string };
   /** 재단 후 완성 크기 */
   format: { presetId: string; width: number; height: number };
-  print: { duplex: boolean; binding: 'left' | 'right' };
+  print: {
+    duplex: boolean;
+    binding: 'left' | 'right';
+    /** 도련 mm (기본 3) */
+    bleed?: number;
+    bindingType?: BindingType;
+    profile?: OutputProfile;
+  };
   margins: Margins;
   pages: Page[];
   assets: Record<string, Asset>;
@@ -149,6 +193,7 @@ export interface Project {
   master?: Master;
   toc?: TocSettings;
   templateId?: string;
+  cover?: Cover;
 }
 
 export interface Rect {

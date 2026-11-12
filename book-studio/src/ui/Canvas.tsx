@@ -5,7 +5,8 @@ import { PX_PER_MM } from '../engine/units';
 import { isRightHand } from '../model/factory';
 import type { PageElement, Project, Rect, TextElement } from '../model/types';
 import { checkpoint, openManuscript, patchElements, useStore } from '../store/store';
-import { PageSvg, useFontsVersion } from './PageSvg';
+import { bleedOf } from '../model/cover';
+import { PageSvg, rotationOf, useFontsVersion } from './PageSvg';
 
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 const HANDLES: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -44,7 +45,7 @@ export function spreadOf(project: Project, pageIndex: number): [number | null, n
   return right ? [o, pageIndex] : [pageIndex, o];
 }
 
-function TextEditor({ el, pageId, scale }: { el: TextElement; pageId: string; scale: number }) {
+function TextEditor({ el, pageId, scale, offset }: { el: TextElement; pageId: string; scale: number; offset: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const res = resolveText(el);
   useEffect(() => {
@@ -68,7 +69,8 @@ function TextEditor({ el, pageId, scale }: { el: TextElement; pageId: string; sc
         if (e.key === 'Escape') e.currentTarget.blur();
       }}
       style={{
-        left: el.x * scale, top: el.y * scale, width: el.w * scale, height: el.h * scale,
+        left: (el.x + offset) * scale, top: (el.y + offset) * scale, width: el.w * scale, height: el.h * scale,
+        transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
         fontFamily: `'${res.font.cssFamily}'`, fontWeight: res.font.bold ? 700 : 400,
         fontSize: res.layout.fontSizeMm * scale, lineHeight: s.lineHeight,
         letterSpacing: `${s.letterSpacing / 1000}em`, color: s.color,
@@ -79,14 +81,26 @@ function TextEditor({ el, pageId, scale }: { el: TextElement; pageId: string; sc
   );
 }
 
-function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex: number; scale: number }) {
+interface StageProps {
+  project: Project;
+  pageIndex: number;
+  scale: number;
+  /** 표지 편집: 쪽 번호와 무관하게 항상 활성 */
+  cover?: boolean;
+  bleed?: number;
+  background?: string;
+  overlay?: React.ReactNode;
+}
+
+export function PageStage({ project, pageIndex, scale, cover, bleed = 0, background, overlay }: StageProps) {
   const currentPage = useStore((s) => s.currentPage);
   const selection = useStore((s) => s.selection);
   const editingId = useStore((s) => s.editingId);
   const showGuides = useStore((s) => s.showGuides);
   const selectedBlock = useStore((s) => s.selectedBlock);
   const page = project.pages[pageIndex];
-  const active = pageIndex === currentPage;
+  const active = cover || pageIndex === currentPage;
+  const at = cover ? {} : { currentPage: pageIndex };
   const drag = useRef<Drag | null>(null);
   useFontsVersion();
 
@@ -94,12 +108,12 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
     if (e.button !== 0) return;
     e.stopPropagation();
     const st = useStore.getState();
-    let sel = st.currentPage === pageIndex ? st.selection : [];
+    let sel = cover || st.currentPage === pageIndex ? st.selection : [];
     if (mode === 'move') {
       if (e.shiftKey) sel = sel.includes(el.id) ? sel.filter((id) => id !== el.id) : [...sel, el.id];
       else if (!sel.includes(el.id)) sel = [el.id];
     } else sel = [el.id];
-    useStore.setState({ currentPage: pageIndex, selection: sel, editingId: null, selectedBlock: null });
+    useStore.setState({ ...at, selection: sel, editingId: null, selectedBlock: null });
     if (!sel.includes(el.id)) return;
     const orig: Record<string, Rect> = {};
     for (const x of page.elements) if (sel.includes(x.id)) orig[x.id] = { x: x.x, y: x.y, w: x.w, h: x.h };
@@ -137,16 +151,17 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
     <div
       className={`page-stage${active ? ' active' : ''}`}
       data-page={pageIndex}
-      onPointerDown={() => useStore.setState({ currentPage: pageIndex, selection: [], editingId: null, selectedBlock: null })}
+      onPointerDown={() => useStore.setState({ ...at, selection: [], editingId: null, selectedBlock: null })}
     >
-      <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id}>
+      <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id} bleed={bleed} background={background}>
+        {overlay}
         {derivedContent(project, pageIndex).texts.filter((t) => t.blockId && page.kind === 'flow').map((t) => (
           <rect
             key={t.key} data-block={t.blockId} className="block-hit"
             x={t.x} y={t.y} width={t.w} height={t.h} fill={selectedBlock === t.blockId ? 'rgba(139,111,84,.1)' : 'transparent'}
             onPointerDown={(e) => {
               e.stopPropagation();
-              useStore.setState({ currentPage: pageIndex, selection: [], editingId: null, selectedBlock: t.blockId! });
+              useStore.setState({ ...at, selection: [], editingId: null, selectedBlock: t.blockId! });
             }}
             onDoubleClick={() => openManuscript(t.blockId)}
           />
@@ -155,7 +170,7 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
           const selected = active && selection.includes(el.id);
           const overflow = el.type === 'text' && resolveText(el)?.layout.overflow;
           return (
-            <g key={el.id}>
+            <g key={el.id} transform={rotationOf(el)}>
               <rect
                 data-el={el.id}
                 x={el.x} y={el.y} width={el.w} height={el.h}
@@ -170,7 +185,7 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
                 onPointerCancel={end}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
-                  if (el.type === 'text') useStore.setState({ currentPage: pageIndex, selection: [el.id], editingId: el.id });
+                  if (el.type === 'text') useStore.setState({ ...at, selection: [el.id], editingId: el.id });
                 }}
               />
               {overflow && (
@@ -183,7 +198,7 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
           );
         })}
         {active && selection.length === 1 && !editing &&
-          page.elements.filter((el) => el.id === selection[0]).map((el) =>
+          page.elements.filter((el) => el.id === selection[0] && !el.rotation).map((el) =>
             HANDLES.map((h) => {
               const cx = el.x + (h.includes('w') ? 0 : h.includes('e') ? el.w : el.w / 2);
               const cy = el.y + (h.includes('n') ? 0 : h.includes('s') ? el.h : el.h / 2);
@@ -200,8 +215,8 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
             }),
           )}
       </PageSvg>
-      {editing && <TextEditor key={editing.id} el={editing as TextElement} pageId={page.id} scale={scale} />}
-      <div className="page-label">{pageIndex + 1}쪽</div>
+      {editing && <TextEditor key={editing.id} el={editing as TextElement} pageId={page.id} scale={scale} offset={bleed} />}
+      {!cover && <div className="page-label">{pageIndex + 1}쪽</div>}
     </div>
   );
 }
@@ -210,6 +225,7 @@ export function Canvas({ project }: { project: Project }) {
   const currentPage = useStore((s) => s.currentPage);
   const zoom = useStore((s) => s.zoom);
   const viewMode = useStore((s) => s.viewMode);
+  const bleed = useStore((s) => s.showBleed) ? bleedOf(project) : 0;
   const ref = useRef<HTMLDivElement>(null);
   const scale = zoom * PX_PER_MM;
 
@@ -238,10 +254,10 @@ export function Canvas({ project }: { project: Project }) {
     <div className="canvas" ref={ref} id="canvas" onPointerDown={() => useStore.setState({ selection: [], editingId: null, selectedBlock: null })}>
       <div className="spread">
         {spread && (left !== null
-          ? <PageStage project={project} pageIndex={left} scale={scale} />
+          ? <PageStage project={project} pageIndex={left} scale={scale} bleed={bleed} />
           : <div className="page-blank" style={{ width: project.format.width * scale, height: project.format.height * scale }} />)}
         {right !== null
-          ? <PageStage project={project} pageIndex={right} scale={scale} />
+          ? <PageStage project={project} pageIndex={right} scale={scale} bleed={bleed} />
           : <div className="page-blank" style={{ width: project.format.width * scale, height: project.format.height * scale }} />}
       </div>
     </div>

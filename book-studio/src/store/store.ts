@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { derive, syncPages } from '../engine/flow';
 import { contentRect, makeBlock, makeImage, makePage, makeText, uid } from '../model/factory';
+import { bleedOf, coverGeom, frontRect, fromDisplay, makeCover, toDisplay } from '../model/cover';
 import { templateCopy } from '../model/templates';
-import type { Asset, Block, Master, Page, PageElement, ParaStyle, Project, StyleName, TocSettings } from '../model/types';
+import type { Asset, Block, Cover, Master, Page, PageElement, ParaStyle, Project, Rect, StyleName, TocSettings } from '../model/types';
 import { saveProject } from './storage';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
@@ -16,7 +17,9 @@ interface State {
   editingId: string | null;
   /** 본문 흐름에서 선택한 문단 */
   selectedBlock: string | null;
-  centerView: 'pages' | 'manuscript';
+  centerView: 'pages' | 'manuscript' | 'cover';
+  /** 내지에서 도련 영역을 함께 보여 준다 */
+  showBleed: boolean;
   /** 원고 보기에서 커서를 둘 문단과 위치 */
   focus: { id: string; caret: number } | null;
   zoom: number;
@@ -39,6 +42,7 @@ export const useStore = create<State>(() => ({
   editingId: null,
   selectedBlock: null,
   centerView: 'pages',
+  showBleed: false,
   focus: null,
   zoom: 1,
   viewMode: 'spread',
@@ -154,10 +158,32 @@ export function flushSave(): Promise<void> {
 }
 
 // ---- 편집 동작 ----
-const mapPage = (p: Project, pageId: string, fn: (page: Page) => Page): Project => ({
-  ...p,
-  pages: p.pages.map((pg) => (pg.id === pageId ? fn(pg) : pg)),
-});
+export const COVER_ID = 'cover';
+
+/** 쪽(또는 표지)의 요소를 바꾼다. 표지는 화면 좌표로 고친 뒤 책등과 무관한 저장 좌표로 되돌린다. */
+const mapPage = (p: Project, pageId: string, fn: (page: Page) => Page): Project => {
+  if (pageId !== COVER_ID) return { ...p, pages: p.pages.map((pg) => (pg.id === pageId ? fn(pg) : pg)) };
+  if (!p.cover) return p;
+  const g = coverGeom(p);
+  const page = fn({ id: COVER_ID, elements: p.cover.elements.map((e) => toDisplay(e, g)) });
+  return { ...p, cover: { ...p.cover, elements: page.elements.map((e) => fromDisplay(e, g)) } };
+};
+
+/** 지금 편집 중인 면: 내지의 현재 쪽 또는 표지 */
+export function surfaceOf(project: Project, centerView: string, currentPage: number): { pageId: string; elements: PageElement[]; place: Rect } {
+  if (centerView === 'cover' && project.cover) {
+    const g = coverGeom(project);
+    const f = frontRect(project, g);
+    const m = 15;
+    return { pageId: COVER_ID, elements: project.cover.elements.map((e) => toDisplay(e, g)), place: { x: f.x + m, y: m, w: f.w - m * 2, h: f.h - m * 2 } };
+  }
+  const page = project.pages[currentPage];
+  return { pageId: page.id, elements: page.elements, place: contentRect(project, currentPage) };
+}
+export const surface = () => {
+  const s = get();
+  return surfaceOf(s.project!, s.centerView, s.currentPage);
+};
 
 export function patchElements(
   pageId: string,
@@ -228,9 +254,9 @@ export function movePage(from: number, to: number) {
 export function addTextBox() {
   const { project, currentPage } = get();
   if (!project) return;
-  const c = contentRect(project, currentPage);
+  const c = surface().place;
   const el = makeText({ x: c.x, y: c.y + c.h / 2 - 15, w: c.w, h: 30 }, '');
-  const pageId = project.pages[currentPage].id;
+  const { pageId } = surface();
   mutate((p) => mapPage(p, pageId, (pg) => ({ ...pg, elements: [...pg.elements, el] })));
   set({ selection: [el.id], editingId: el.id });
 }
@@ -238,7 +264,7 @@ export function addTextBox() {
 export function addImage(asset: Asset) {
   const { project, currentPage } = get();
   if (!project) return;
-  const c = contentRect(project, currentPage);
+  const c = surface().place;
   const ar = asset.pxW / asset.pxH;
   let w = c.w;
   let h = w / ar;
@@ -247,7 +273,7 @@ export function addImage(asset: Asset) {
     w = h * ar;
   }
   const el = makeImage({ x: c.x + (c.w - w) / 2, y: c.y + (c.h - h) / 2, w, h }, asset.id);
-  const pageId = project.pages[currentPage].id;
+  const { pageId } = surface();
   mutate((p) => mapPage({ ...p, assets: { ...p.assets, [asset.id]: asset } }, pageId, (pg) => ({
     ...pg, elements: [...pg.elements, el],
   })));
@@ -259,6 +285,7 @@ function pruneAssets(p: Project): Project {
   const used = new Set<string>();
   for (const pg of p.pages) for (const e of pg.elements) if (e.type === 'image') used.add(e.assetId);
   for (const b of p.story ?? []) if (b.assetId) used.add(b.assetId);
+  for (const e of p.cover?.elements ?? []) if (e.type === 'image') used.add(e.assetId);
   const ids = Object.keys(p.assets);
   if (ids.every((id) => used.has(id))) return p;
   return { ...p, assets: Object.fromEntries(ids.filter((id) => used.has(id)).map((id) => [id, p.assets[id]])) };
@@ -267,7 +294,7 @@ function pruneAssets(p: Project): Project {
 export function deleteSelection() {
   const { project, currentPage, selection } = get();
   if (!project || !selection.length) return;
-  const pageId = project.pages[currentPage].id;
+  const { pageId } = surface();
   mutate((p) => pruneAssets(mapPage(p, pageId, (pg) => ({
     ...pg, elements: pg.elements.filter((e) => !selection.includes(e.id)),
   }))));
@@ -279,7 +306,7 @@ let clipboard: PageElement[] = [];
 export function copySelection() {
   const { project, currentPage, selection } = get();
   if (!project) return;
-  clipboard = project.pages[currentPage].elements.filter((e) => selection.includes(e.id));
+  clipboard = surface().elements.filter((e) => selection.includes(e.id));
 }
 
 export function pasteClipboard(offset = 4) {
@@ -290,7 +317,7 @@ export function pasteClipboard(offset = 4) {
     .filter((e) => e.type !== 'image' || project.assets[e.assetId])
     .map((e) => ({ ...e, id: uid(), x: e.x + offset, y: e.y + offset }));
   if (!copies.length) return;
-  const pageId = project.pages[currentPage].id;
+  const { pageId } = surface();
   mutate((p) => mapPage(p, pageId, (pg) => ({ ...pg, elements: [...pg.elements, ...copies] })));
   clipboard = copies;
   set({ selection: copies.map((e) => e.id), editingId: null });
@@ -299,7 +326,7 @@ export function pasteClipboard(offset = 4) {
 export function reorderSelection(dir: 'front' | 'back') {
   const { project, currentPage, selection } = get();
   if (!project || !selection.length) return;
-  const pageId = project.pages[currentPage].id;
+  const { pageId } = surface();
   mutate((p) => mapPage(p, pageId, (pg) => {
     const sel = pg.elements.filter((e) => selection.includes(e.id));
     const rest = pg.elements.filter((e) => !selection.includes(e.id));
@@ -398,3 +425,29 @@ export function openManuscript(blockId?: string | null) {
   const b = get().project?.story?.find((x) => x.id === blockId);
   set({ centerView: 'manuscript', selection: [], editingId: null, focus: b && !b.assetId ? { id: b.id, caret: b.text.length } : null });
 }
+
+// ---- 도형·표지·인쇄 설정 ----
+export function addRect() {
+  if (!get().project) return;
+  const { pageId, place: c } = surface();
+  const w = Math.min(60, c.w);
+  const el: PageElement = { id: uid(), type: 'rect', x: c.x + (c.w - w) / 2, y: c.y + c.h / 2 - 20, w, h: 40, fill: '#7a8b72', opacity: 1 };
+  mutate((p) => mapPage(p, pageId, (pg) => ({ ...pg, elements: [...pg.elements, el] })));
+  set({ selection: [el.id], editingId: null, selectedBlock: null });
+}
+
+/** 템플릿으로 표지를 만든다. 이미 있으면 종이·날개 설정은 유지하고 디자인만 바꾼다. */
+export function createCover(templateId: string) {
+  mutate((p) => pruneAssets({ ...p, cover: makeCover(p, templateId, p.cover) }));
+  set({ selection: [], editingId: null });
+}
+
+export function patchCover(patch: Partial<Cover>, key: string) {
+  mutate((p) => (p.cover ? { ...p, cover: { ...p.cover, ...patch } } : p), { coalesce: `cover:${key}` });
+}
+
+export function patchPrint(patch: Partial<Project['print']>, key: string) {
+  mutate((p) => ({ ...p, print: { ...p.print, ...patch } }), { coalesce: `print:${key}` });
+}
+
+export { bleedOf };

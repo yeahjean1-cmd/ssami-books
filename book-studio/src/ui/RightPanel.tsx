@@ -1,12 +1,14 @@
 import { FontError, inspectFontFile, listFamilies, registerFontData } from '../engine/fonts';
+import { inspectIcc } from '../engine/pdf';
 import { effectiveDpi, resolveText } from '../engine/render';
+import { COVER_TEMPLATES, PAPERS, bleedOf, computedSpine, coverGeom } from '../model/cover';
 import { round1 } from '../engine/units';
 import { presetName } from '../model/presets';
 import { STYLE_LABEL, STYLE_NAMES, TEMPLATES } from '../model/templates';
-import type { Block, ImageElement, Master, PageElement, ParaStyle, Project, RunningText, StyleName, TextElement, TextStyle } from '../model/types';
+import type { BindingType, Block, ImageElement, RectElement, Master, PageElement, ParaStyle, Project, RunningText, StyleName, TextElement, TextStyle } from '../model/types';
 import { saveFont } from '../store/storage';
 import {
-  applyTemplate, mutate, notify, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
+  applyTemplate, createCover, mutate, notify, patchCover, patchPrint, surfaceOf, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
   reorderSelection, useStore,
 } from '../store/store';
 import { NumField, Segmented, pickFile, readFile } from './fields';
@@ -39,6 +41,9 @@ function Geometry({ el, pageId }: { el: PageElement; pageId: string }) {
         <NumField label="너비" unit="mm" value={round1(el.w)} min={3} step={0.5} onChange={(w) => set({ w }, 'w')} />
         <NumField label="높이" unit="mm" value={round1(el.h)} min={3} step={0.5} onChange={(h) => set({ h }, 'h')} />
       </div>
+      <Segmented label="회전" value={String(el.rotation ?? 0)} onChange={(v) => set({ rotation: Number(v) || undefined }, 'rot')}
+        options={[{ value: '0', label: '0°' }, { value: '90', label: '90°' }, { value: '180', label: '180°' }, { value: '270', label: '270°' }]} />
+      {!!el.rotation && <p className="hint">돌린 요소는 끌어서 옮길 수 있고, 크기는 위 숫자로 바꿔요.</p>}
       <div className="row">
         <button className="btn" onClick={() => reorderSelection('front')}>맨 앞으로</button>
         <button className="btn" onClick={() => reorderSelection('back')}>맨 뒤로</button>
@@ -288,6 +293,134 @@ function ImageProps({ el, pageId, project }: { el: ImageElement; pageId: string;
   );
 }
 
+function RectProps({ el, pageId }: { el: RectElement; pageId: string }) {
+  return (
+    <>
+      <section>
+        <h3>도형</h3>
+        <label className="field">
+          <span>채우기 색</span>
+          <div className="field-input color">
+            <input id="rect-fill" type="color" value={el.fill} onChange={(e) => patchElements(pageId, { [el.id]: { fill: e.target.value } }, { coalesce: `fill:${el.id}` })} />
+            <em>{el.fill.toUpperCase()}</em>
+          </div>
+        </label>
+        <NumField label="불투명도" unit="%" value={Math.round(el.opacity * 100)} min={0} max={100} step={5}
+          onChange={(v) => patchElements(pageId, { [el.id]: { opacity: v / 100 } }, { coalesce: `op:${el.id}` })} />
+      </section>
+      <Geometry el={el} pageId={pageId} />
+    </>
+  );
+}
+
+async function loadProfile() {
+  const file = await pickFile('.icc,.icm');
+  if (!file) return;
+  try {
+    const data = new Uint8Array(await readFile(file, 'buffer'));
+    const { name } = inspectIcc(data);
+    let bin = '';
+    for (let i = 0; i < data.length; i += 0x8000) bin += String.fromCharCode(...data.subarray(i, i + 0x8000));
+    patchPrint({ profile: { name, data: btoa(bin) } }, 'profile');
+    notify(`출력 프로파일 ‘${name}’을(를) 불러왔어요. 이제 PDF/X-4로 내보낼 수 있어요.`);
+  } catch (e) {
+    notify(e instanceof Error ? e.message : '프로파일을 읽지 못했어요.', 'error');
+  }
+}
+
+/** 인쇄 설정: 도련, 제본, 인쇄소 출력 프로파일 */
+function PrintSettings({ project }: { project: Project }) {
+  const profile = project.print.profile;
+  return (
+    <section>
+      <h3>인쇄 설정</h3>
+      <div className="grid2">
+        <NumField id="bleed" label="도련" unit="mm" value={bleedOf(project)} min={0} max={10} step={0.5} onChange={(bleed) => patchPrint({ bleed }, 'bleed')} />
+        <label className="field"><span>제본</span>
+          <select id="binding-type" value={project.print.bindingType ?? 'perfect'} onChange={(e) => patchPrint({ bindingType: e.target.value as BindingType }, 'bt')}>
+            <option value="perfect">무선제본</option>
+            <option value="saddle">중철제본</option>
+          </select>
+        </label>
+      </div>
+      <p className="hint">도련은 재단 오차에 대비해 완성 크기 바깥으로 더 인쇄하는 여분이에요. 보통 3mm를 써요. 중철제본은 책등이 없고 쪽수가 4의 배수여야 해요.</p>
+      <div className="field">
+        <span>인쇄소 출력 프로파일 (ICC)</span>
+        <div className="profile" id="profile-name">{profile ? profile.name : '없음'}</div>
+        <div className="row">
+          <button className="btn small" id="load-profile" onClick={loadProfile}>프로파일 파일 불러오기</button>
+          {profile && <button className="btn small" onClick={() => patchPrint({ profile: undefined }, 'profile')}>지우기</button>}
+        </div>
+      </div>
+      <p className="hint">인쇄소가 알려 준 CMYK 프로파일(예: Japan Color 2001 Coated, FOGRA39)을 불러오면 PDF/X-4로 내보낼 수 있어요. 프로젝트에 함께 저장돼요.</p>
+    </section>
+  );
+}
+
+/** 표지 설정: 디자인, 배경, 종이와 책등, 날개 */
+function CoverProps({ project }: { project: Project }) {
+  const c = project.cover!;
+  const g = coverGeom(project);
+  const calc = computedSpine(project);
+  const saddle = project.print.bindingType === 'saddle';
+  return (
+    <>
+      <section>
+        <h3>표지 디자인</h3>
+        <div className="template-list">
+          {COVER_TEMPLATES.map((t) => (
+            <button key={t.id} className="template" data-cover-template={t.id}
+              onClick={() => confirm(`‘${t.name}’ 디자인으로 표지를 다시 만들까요? 지금 표지에 놓은 요소는 사라져요. (실행 취소로 되돌릴 수 있어요)`) && createCover(t.id)}>
+              <b>{t.name}</b><small>{t.hint}</small>
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>배경색</span>
+          <div className="field-input color">
+            <input id="cover-bg" type="color" value={c.background} onChange={(e) => patchCover({ background: e.target.value }, 'bg')} />
+            <em>{c.background.toUpperCase()}</em>
+          </div>
+        </label>
+      </section>
+      <section>
+        <h3>책등</h3>
+        {saddle ? <p className="hint">중철제본은 책등이 없어요.</p> : (
+          <>
+            <label className="field"><span>내지 종이</span>
+              <select id="paper" value={c.paperId} onChange={(e) => {
+                const p = PAPERS.find((x) => x.id === e.target.value)!;
+                patchCover(p.id === 'custom' ? { paperId: p.id } : { paperId: p.id, paperThickness: p.thickness }, 'paper');
+              }}>
+                {PAPERS.map((p) => <option key={p.id} value={p.id}>{p.name}{p.id !== 'custom' ? ` · ${p.thickness}mm` : ''}</option>)}
+              </select>
+            </label>
+            <NumField label="종이 한 장 두께" unit="mm" value={c.paperThickness} min={0.03} max={0.5} step={0.005}
+              onChange={(paperThickness) => patchCover({ paperThickness, paperId: 'custom' }, 'th')} />
+            <dl className="info">
+              <dt>계산값</dt><dd id="spine-calc">{calc}mm ({project.pages.length}쪽 ÷ {project.print.duplex ? 2 : 1} × {c.paperThickness}mm)</dd>
+              <dt>적용 중</dt><dd id="spine-used">{g.spine}mm{c.spineOverride !== undefined ? ' (직접 입력)' : ''}</dd>
+            </dl>
+            <label className="check">
+              <input id="spine-manual" type="checkbox" checked={c.spineOverride !== undefined} onChange={(e) => patchCover({ spineOverride: e.target.checked ? calc : undefined }, 'so')} />
+              인쇄소가 알려 준 책등 너비 직접 입력
+            </label>
+            {c.spineOverride !== undefined && (
+              <NumField id="spine-override" label="책등 너비" unit="mm" value={c.spineOverride} min={0} max={100} step={0.5} onChange={(spineOverride) => patchCover({ spineOverride }, 'sov')} />
+            )}
+            <p className="hint">종이 두께는 제조사와 생산 시기에 따라 달라 계산값은 참고용이에요. 인쇄 전에 인쇄소가 알려 주는 책등 너비를 꼭 확인해 주세요. 쪽수가 바뀌면 책등과 표지 크기가 자동으로 바뀌어요.</p>
+          </>
+        )}
+      </section>
+      <section>
+        <h3>날개</h3>
+        <NumField id="flap" label="날개 너비 (0 = 없음)" unit="mm" value={c.flap} min={0} max={project.format.width - 10} step={5} onChange={(flap) => patchCover({ flap }, 'flap')} />
+      </section>
+      <PrintSettings project={project} />
+    </>
+  );
+}
+
 function DocumentProps({ project }: { project: Project }) {
   const showGuides = useStore((s) => s.showGuides);
   const m = project.margins;
@@ -329,6 +462,7 @@ function DocumentProps({ project }: { project: Project }) {
         </label>
         <p className="hint">여백을 바꾸면 본문은 자동으로 다시 조판돼요. 직접 놓은 글 상자와 이미지는 옮겨지지 않아요.</p>
       </section>
+      <PrintSettings project={project} />
     </>
   );
 }
@@ -336,8 +470,11 @@ function DocumentProps({ project }: { project: Project }) {
 export function RightPanel({ project }: { project: Project }) {
   const currentPage = useStore((s) => s.currentPage);
   const selection = useStore((s) => s.selection);
-  const page = project.pages[currentPage];
-  const selected = page.elements.filter((e) => selection.includes(e.id));
+  const centerView0 = useStore((s) => s.centerView);
+  const sf = surfaceOf(project, centerView0, currentPage);
+  const page = { id: sf.pageId };
+  const selected = sf.elements.filter((e) => selection.includes(e.id));
+  const onCover = centerView0 === 'cover';
   const selectedBlock = useStore((s) => s.selectedBlock);
   const centerView = useStore((s) => s.centerView);
   const focus = useStore((s) => s.focus);
@@ -346,8 +483,11 @@ export function RightPanel({ project }: { project: Project }) {
   const block = project.story?.find((b) => b.id === blockId && !b.assetId);
   return (
     <aside className="panel right" id="right-panel">
-      {selected.length === 0 && block && <BlockProps block={block} project={project} />}
-      {selected.length === 0 && !block && (
+      {selected.length === 1 && selected[0].type === 'rect' && <RectProps el={selected[0]} pageId={page.id} />}
+      {selected.length === 0 && onCover && project.cover && <CoverProps project={project} />}
+      {selected.length === 0 && onCover && !project.cover && <PrintSettings project={project} />}
+      {selected.length === 0 && !onCover && block && <BlockProps block={block} project={project} />}
+      {selected.length === 0 && !onCover && !block && (
         <>
           {project.story && project.master && <BookDesign project={project} />}
           <DocumentProps project={project} />
