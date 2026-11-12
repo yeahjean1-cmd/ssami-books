@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
+import { derivedContent } from '../engine/flow';
 import { resolveText } from '../engine/render';
 import { PX_PER_MM } from '../engine/units';
 import { isRightHand } from '../model/factory';
 import type { PageElement, Project, Rect, TextElement } from '../model/types';
-import { checkpoint, patchElements, useStore } from '../store/store';
+import { checkpoint, openManuscript, patchElements, useStore } from '../store/store';
 import { PageSvg, useFontsVersion } from './PageSvg';
 
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
@@ -83,6 +84,7 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
   const selection = useStore((s) => s.selection);
   const editingId = useStore((s) => s.editingId);
   const showGuides = useStore((s) => s.showGuides);
+  const selectedBlock = useStore((s) => s.selectedBlock);
   const page = project.pages[pageIndex];
   const active = pageIndex === currentPage;
   const drag = useRef<Drag | null>(null);
@@ -97,7 +99,7 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
       if (e.shiftKey) sel = sel.includes(el.id) ? sel.filter((id) => id !== el.id) : [...sel, el.id];
       else if (!sel.includes(el.id)) sel = [el.id];
     } else sel = [el.id];
-    useStore.setState({ currentPage: pageIndex, selection: sel, editingId: null });
+    useStore.setState({ currentPage: pageIndex, selection: sel, editingId: null, selectedBlock: null });
     if (!sel.includes(el.id)) return;
     const orig: Record<string, Rect> = {};
     for (const x of page.elements) if (sel.includes(x.id)) orig[x.id] = { x: x.x, y: x.y, w: x.w, h: x.h };
@@ -135,9 +137,20 @@ function PageStage({ project, pageIndex, scale }: { project: Project; pageIndex:
     <div
       className={`page-stage${active ? ' active' : ''}`}
       data-page={pageIndex}
-      onPointerDown={() => useStore.setState({ currentPage: pageIndex, selection: [], editingId: null })}
+      onPointerDown={() => useStore.setState({ currentPage: pageIndex, selection: [], editingId: null, selectedBlock: null })}
     >
       <PageSvg project={project} pageIndex={pageIndex} scale={scale} showGuides={showGuides} editingId={editing?.id}>
+        {derivedContent(project, pageIndex).texts.filter((t) => t.blockId && page.kind === 'flow').map((t) => (
+          <rect
+            key={t.key} data-block={t.blockId} className="block-hit"
+            x={t.x} y={t.y} width={t.w} height={t.h} fill={selectedBlock === t.blockId ? 'rgba(139,111,84,.1)' : 'transparent'}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              useStore.setState({ currentPage: pageIndex, selection: [], editingId: null, selectedBlock: t.blockId! });
+            }}
+            onDoubleClick={() => openManuscript(t.blockId)}
+          />
+        ))}
         {page.elements.map((el) => {
           const selected = active && selection.includes(el.id);
           const overflow = el.type === 'text' && resolveText(el)?.layout.overflow;
@@ -222,7 +235,7 @@ export function Canvas({ project }: { project: Project }) {
   }, [project.id]);
 
   return (
-    <div className="canvas" ref={ref} id="canvas" onPointerDown={() => useStore.setState({ selection: [], editingId: null })}>
+    <div className="canvas" ref={ref} id="canvas" onPointerDown={() => useStore.setState({ selection: [], editingId: null, selectedBlock: null })}>
       <div className="spread">
         {spread && (left !== null
           ? <PageStage project={project} pageIndex={left} scale={scale} />

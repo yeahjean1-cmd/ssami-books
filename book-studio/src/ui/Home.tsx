@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { createProject, parseProjectFile, uid, type NewProjectInput } from '../model/factory';
+import { IMPORT_ACCEPT, ImportError, importManuscript, type ImportResult } from '../engine/import';
+import { createProject, makeBlock, parseProjectFile, uid, type NewProjectInput } from '../model/factory';
+import { STYLE_LABEL, TEMPLATES } from '../model/templates';
+import type { Asset, Block } from '../model/types';
+import { assetFromDataUrl } from './assets';
 import { CUSTOM_PRESET_ID, FORMAT_PRESETS, presetName, recommendedMargins } from '../model/presets';
 import { deleteProject, listProjects, loadProject, saveProject, type ProjectSummary } from '../store/storage';
 import { notify, openProject } from '../store/store';
@@ -21,10 +25,78 @@ async function openFromFile(refresh: () => void) {
   }
 }
 
-function Wizard({ onClose }: { onClose: () => void }) {
+interface Imported { name: string; result: ImportResult }
+
+/** 가져온 원고를 프로젝트 데이터(문단 + 이미지 에셋)로 바꾼다. */
+async function toStory(result: ImportResult): Promise<{ blocks: Block[]; assets: Record<string, Asset>; skipped: number }> {
+  const blocks: Block[] = [];
+  const assets: Record<string, Asset> = {};
+  let skipped = 0;
+  for (const b of result.blocks) {
+    if (!b.image) {
+      blocks.push(makeBlock(b.style, b.text));
+      continue;
+    }
+    try {
+      if (!/^image\/(png|jpeg|webp)$/.test(b.image.mime)) throw new Error('unsupported');
+      const asset = await assetFromDataUrl(b.image.dataUrl, b.image.mime, b.image.name);
+      assets[asset.id] = asset;
+      blocks.push(makeBlock('body', '', { assetId: asset.id }));
+    } catch {
+      skipped++;
+    }
+  }
+  return { blocks, assets, skipped };
+}
+
+function ImportPreview({ imported, onCancel, onNext }: { imported: Imported; onCancel: () => void; onNext: () => void }) {
+  const { blocks, warnings, format } = imported.result;
+  const count = (st: string) => blocks.filter((b) => b.style === st && !b.image).length;
+  const chars = blocks.reduce((n, b) => n + b.text.length, 0);
+  return (
+    <div className="modal-back">
+      <div className="modal" role="dialog" aria-label="원고 가져오기">
+        <div className="modal-head">
+          <h2>원고를 이렇게 읽었어요</h2>
+          <p className="modal-sub">{imported.name} · {format}</p>
+        </div>
+        <div className="modal-body import-body">
+          <div className="import-stats" id="import-stats">
+            <div><b>{count('chapter')}</b><span>장 제목</span></div>
+            <div><b>{count('section')}</b><span>절 제목</span></div>
+            <div><b>{count('body') + count('quote')}</b><span>본문 문단</span></div>
+            <div><b>{blocks.filter((b) => b.image).length}</b><span>이미지</span></div>
+            <div><b>{chars.toLocaleString('ko-KR')}</b><span>글자</span></div>
+          </div>
+          <div className="notice info">
+            <b>가져오기 전에 확인해 주세요</b>
+            <ul>{warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+            <span>원본 파일은 바뀌지 않아요. 잘못 읽은 문단 종류는 책을 만든 뒤 ‘원고’ 보기에서 고칠 수 있어요.</span>
+          </div>
+          <div className="import-list">
+            {blocks.slice(0, 60).map((b, i) => (
+              <div key={i} className={`import-row style-${b.style}`}>
+                <span className="badge">{b.image ? '이미지' : STYLE_LABEL[b.style]}</span>
+                <p>{b.image ? b.image.name : b.text}</p>
+              </div>
+            ))}
+            {blocks.length > 60 && <p className="hint">… 외 {blocks.length - 60}개 문단</p>}
+          </div>
+        </div>
+        <div className="modal-foot">
+          <button className="btn ghost" onClick={onCancel}>취소</button>
+          <div className="spacer" />
+          <button className="btn primary" id="import-next" onClick={onNext}>이 원고로 책 만들기</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Wizard({ onClose, imported }: { onClose: () => void; imported?: Imported }) {
   const [step, setStep] = useState(0);
   const [f, setF] = useState<NewProjectInput>({
-    title: '', subtitle: '', author: '', publisher: '', presetId: 'shinkuk', width: 152, height: 225,
+    title: imported?.name.replace(/\.[^.]+$/, '') ?? '', subtitle: '', author: '', publisher: '', templateId: 'essay', presetId: 'shinkuk', width: 152, height: 225,
     duplex: true, binding: 'left', margins: recommendedMargins(152, 225),
   });
   const [landscape, setLandscape] = useState(false);
@@ -39,21 +111,31 @@ function Wizard({ onClose }: { onClose: () => void }) {
     if (!p) return up({ presetId: CUSTOM_PRESET_ID });
     up({ presetId: id, width: land ? p.height : p.width, height: land ? p.width : p.height });
   };
-  const steps = ['책 정보', '판형', '인쇄와 여백'];
+  const steps = ['책 정보', '판형', '인쇄와 여백', '디자인'];
+  const [busy, setBusy] = useState(false);
   const k = 150 / Math.max(f.width, f.height);
   const m = f.margins;
 
   const finish = async () => {
-    const project = createProject(f);
-    await saveProject(project);
-    openProject(project);
+    setBusy(true);
+    try {
+      const story = imported ? await toStory(imported.result) : undefined;
+      const project = createProject({ ...f, imported: story && { blocks: story.blocks, assets: story.assets } });
+      await saveProject(project);
+      openProject(project);
+      if (story?.skipped) notify(`열 수 없는 형식의 이미지 ${story.skipped}개는 가져오지 못했어요.`, 'error');
+    } catch (e) {
+      console.error(e);
+      notify('책을 만들지 못했어요. 다시 시도해 주세요.', 'error');
+      setBusy(false);
+    }
   };
 
   return (
     <div className="modal-back" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal" role="dialog" aria-label="새 책 만들기">
         <div className="modal-head">
-          <h2>새 책 만들기</h2>
+          <h2>{imported ? '가져온 원고로 책 만들기' : '새 책 만들기'}</h2>
           <ol className="steps">{steps.map((s, i) => <li key={s} className={i === step ? 'on' : i < step ? 'done' : ''}>{i + 1}. {s}</li>)}</ol>
         </div>
 
@@ -135,15 +217,30 @@ function Wizard({ onClose }: { onClose: () => void }) {
               </div>
             </div>
           )}
+
+          {step === 3 && (
+            <div className="form wide">
+              <div className="presets two">
+                {TEMPLATES.map((t) => (
+                  <button key={t.id} className={`preset tpl${f.templateId === t.id ? ' on' : ''}`} data-template={t.id} onClick={() => up({ templateId: t.id })}>
+                    <strong>{t.name}</strong>
+                    <span>{t.hint}</span>
+                    <small>본문 {t.styles.body.fontSize}pt · 행간 {t.styles.body.lineHeight}배 · {t.styles.body.fontFamily === 'Pretendard' ? '고딕' : '명조'}</small>
+                  </button>
+                ))}
+              </div>
+              <p className="hint">본문 디자인의 시작점을 골라 주세요. 글꼴·크기·간격·쪽 번호는 책을 만든 뒤에도 언제든 바꿀 수 있어요.</p>
+            </div>
+          )}
         </div>
 
         <div className="modal-foot">
           <button className="btn ghost" onClick={onClose}>취소</button>
           <div className="spacer" />
           {step > 0 && <button className="btn" onClick={() => setStep(step - 1)}>이전</button>}
-          {step < 2
+          {step < 3
             ? <button className="btn primary" id="w-next" onClick={() => setStep(step + 1)}>다음</button>
-            : <button className="btn primary" id="w-create" onClick={finish}>책 만들기</button>}
+            : <button className="btn primary" id="w-create" disabled={busy} onClick={finish}>{busy ? '책을 만드는 중…' : '책 만들기'}</button>}
         </div>
       </div>
     </div>
@@ -153,6 +250,9 @@ function Wizard({ onClose }: { onClose: () => void }) {
 export function Home() {
   const [list, setList] = useState<ProjectSummary[] | null>(null);
   const [wizard, setWizard] = useState(false);
+  const [imported, setImported] = useState<Imported | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [fromImport, setFromImport] = useState(false);
   const refresh = () => listProjects().then(setList, () => setList([]));
   useEffect(() => { refresh(); }, []);
 
@@ -160,6 +260,20 @@ export function Home() {
     const p = await loadProject(id);
     if (p) openProject(p);
     else notify('프로젝트를 찾을 수 없어요.', 'error');
+  };
+  const importFile = async () => {
+    const file = await pickFile(IMPORT_ACCEPT + ',.doc,.rtf');
+    if (!file) return;
+    setImporting(true);
+    try {
+      const result = await importManuscript(file.name, new Uint8Array(await readFile(file, 'buffer')));
+      setImported({ name: file.name, result });
+    } catch (e) {
+      if (!(e instanceof ImportError)) console.error(e);
+      notify(e instanceof ImportError ? e.message : '원고를 읽지 못했어요. 파일이 손상되었을 수 있어요.', 'error');
+    } finally {
+      setImporting(false);
+    }
   };
   const remove = async (s: ProjectSummary) => {
     if (!confirm(`‘${s.title}’을(를) 삭제할까요? 삭제하면 되돌릴 수 없어요.`)) return;
@@ -174,8 +288,10 @@ export function Home() {
         <p>원고에서 인쇄용 PDF까지, 한 권의 책을 만드는 곳</p>
       </header>
       <main>
+        <p className="home-formats">원고 가져오기: TXT · Word(DOCX) · 한글(HWPX, HWP)</p>
         <div className="home-actions">
           <button className="btn primary large" id="new-book" onClick={() => setWizard(true)}>새 책 만들기</button>
+          <button className="btn large" id="import-file" disabled={importing} onClick={importFile}>{importing ? '원고를 읽는 중…' : '원고 가져오기'}</button>
           <button className="btn large" id="open-file" onClick={() => openFromFile(refresh)}>프로젝트 파일 열기</button>
         </div>
         <h2>최근 프로젝트</h2>
@@ -198,7 +314,10 @@ export function Home() {
           ))}
         </div>
       </main>
-      {wizard && <Wizard onClose={() => setWizard(false)} />}
+      {wizard && <Wizard onClose={() => { setWizard(false); setFromImport(false); setImported(null); }} imported={fromImport && imported ? imported : undefined} />}
+      {imported && !wizard && (
+        <ImportPreview imported={imported} onCancel={() => setImported(null)} onNext={() => { setFromImport(true); setWizard(true); }} />
+      )}
     </div>
   );
 }

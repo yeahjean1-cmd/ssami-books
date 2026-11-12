@@ -1,4 +1,5 @@
-import type { ImageElement, Margins, Page, Project, Rect, TextElement, TextStyle } from './types';
+import { DEFAULT_TOC, templateCopy } from './templates';
+import type { Asset, Block, ImageElement, Margins, Page, PageKind, Project, Rect, StyleName, TextElement, TextStyle } from './types';
 
 export const uid = () =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -39,8 +40,12 @@ export function makeImage(rect: Rect, assetId: string): ImageElement {
   return { id: uid(), type: 'image', ...rect, assetId, fit: 'cover', opacity: 1 };
 }
 
-export function makePage(): Page {
-  return { id: uid(), elements: [] };
+export function makePage(kind: PageKind = 'free'): Page {
+  return { id: uid(), kind, elements: [] };
+}
+
+export function makeBlock(style: StyleName, text: string, extra: Partial<Block> = {}): Block {
+  return { id: uid(), style, text, ...extra };
 }
 
 export interface NewProjectInput {
@@ -54,6 +59,9 @@ export interface NewProjectInput {
   duplex: boolean;
   binding: 'left' | 'right';
   margins: Margins;
+  templateId?: string;
+  /** 가져온 원고. 없으면 예시 문단으로 시작한다. */
+  imported?: { blocks: Block[]; assets: Record<string, Asset> };
 }
 
 export function createProject(input: NewProjectInput): Project {
@@ -73,7 +81,13 @@ export function createProject(input: NewProjectInput): Project {
     print: { duplex: input.duplex, binding: input.binding },
     margins: { ...input.margins },
     pages: [],
-    assets: {},
+    assets: { ...input.imported?.assets },
+    story: input.imported?.blocks ?? [
+      makeBlock('chapter', '첫 번째 장'),
+      makeBlock('body', '‘원고’ 보기에서 글을 써 보세요. 글이 길어지면 쪽이 자동으로 늘어나요.'),
+    ],
+    ...templateCopy(input.templateId),
+    toc: { ...DEFAULT_TOC },
   };
 
   // 1쪽: 속표지
@@ -106,12 +120,12 @@ export function createProject(input: NewProjectInput): Project {
         { ...center, fontFamily: 'Pretendard', fontSize: 9, lineHeight: 1.6 }),
     );
   }
+  titlePage.hideMaster = true;
   project.pages.push(titlePage);
 
-  // 2쪽: 본문 시작
-  const body = makePage();
-  body.elements.push(makeText(contentRect(project, 1), '여기를 두 번 눌러 글을 써 보세요.'));
-  project.pages.push(body);
+  // 장이 여럿인 원고는 차례 쪽을 넣는다. 본문 쪽은 원고 분량에 맞춰 자동으로 만들어진다(syncPages).
+  if (project.story!.filter((b) => b.style === 'chapter').length >= 2) project.pages.push(makePage('toc'));
+  project.pages.push(makePage('flow'));
   return project;
 }
 

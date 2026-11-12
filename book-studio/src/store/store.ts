@@ -1,6 +1,8 @@
 import { create } from 'zustand';
-import { contentRect, makeImage, makePage, makeText, uid } from '../model/factory';
-import type { Asset, Page, PageElement, Project } from '../model/types';
+import { derive, syncPages } from '../engine/flow';
+import { contentRect, makeBlock, makeImage, makePage, makeText, uid } from '../model/factory';
+import { templateCopy } from '../model/templates';
+import type { Asset, Block, Master, Page, PageElement, ParaStyle, Project, StyleName, TocSettings } from '../model/types';
 import { saveProject } from './storage';
 
 export type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
@@ -12,6 +14,11 @@ interface State {
   currentPage: number;
   selection: string[];
   editingId: string | null;
+  /** 본문 흐름에서 선택한 문단 */
+  selectedBlock: string | null;
+  centerView: 'pages' | 'manuscript';
+  /** 원고 보기에서 커서를 둘 문단과 위치 */
+  focus: { id: string; caret: number } | null;
   zoom: number;
   viewMode: 'single' | 'spread';
   showGuides: boolean;
@@ -30,6 +37,9 @@ export const useStore = create<State>(() => ({
   currentPage: 0,
   selection: [],
   editingId: null,
+  selectedBlock: null,
+  centerView: 'pages',
+  focus: null,
   zoom: 1,
   viewMode: 'spread',
   showGuides: true,
@@ -47,7 +57,11 @@ export function notify(text: string, kind: 'info' | 'error' = 'info') {
 }
 
 export function openProject(project: Project) {
-  set({ project, past: [], future: [], currentPage: 0, selection: [], editingId: null, saveState: 'saved' });
+  const synced = syncPages(project, uid);
+  set({
+    project: synced, past: [], future: [], currentPage: 0, selection: [], editingId: null, selectedBlock: null,
+    centerView: 'pages', focus: null, saveState: synced === project ? 'saved' : 'dirty',
+  });
 }
 
 export async function closeProject() {
@@ -70,15 +84,21 @@ export function checkpoint() {
 export function mutate(fn: (p: Project) => Project, opts: { history?: boolean; coalesce?: string } = {}) {
   const { project } = get();
   if (!project) return;
-  const next = fn(project);
-  if (next === project) return;
+  const changed = fn(project);
+  if (changed === project) return;
+  // 원고 분량이 바뀌면 본문·목차 쪽 수를 맞춘다
+  const next = syncPages(changed, uid);
   if (opts.history !== false) {
     const now = Date.now();
     if (!(opts.coalesce && opts.coalesce === coalesceKey && now - coalesceAt < 1500)) checkpoint();
     coalesceKey = opts.coalesce ?? '';
     coalesceAt = now;
   }
-  set({ project: { ...next, updatedAt: Date.now() }, saveState: 'dirty' });
+  const s = get();
+  set({
+    project: { ...next, updatedAt: Date.now() }, saveState: 'dirty',
+    currentPage: Math.min(s.currentPage, next.pages.length - 1),
+  });
   scheduleSave();
 }
 
@@ -186,8 +206,11 @@ export function duplicatePage(index: number) {
 export function deletePage(index: number) {
   const { project } = get();
   if (!project || project.pages.length <= 1) return;
-  mutate((p) => ({ ...p, pages: p.pages.filter((_, i) => i !== index) }));
-  set({ currentPage: Math.min(index, project.pages.length - 2), selection: [], editingId: null });
+  const kind = project.pages[index].kind;
+  if (kind === 'flow') return; // 본문 쪽은 원고 분량에 따라 자동으로 관리된다
+  // 차례는 여러 쪽이어도 한 묶음이므로 함께 지운다
+  mutate((p) => ({ ...p, pages: p.pages.filter((pg, i) => (kind === 'toc' ? pg.kind !== 'toc' : i !== index)) }));
+  set({ currentPage: Math.min(index, get().project!.pages.length - 1), selection: [], editingId: null });
 }
 
 export function movePage(from: number, to: number) {
@@ -235,6 +258,7 @@ export function addImage(asset: Asset) {
 function pruneAssets(p: Project): Project {
   const used = new Set<string>();
   for (const pg of p.pages) for (const e of pg.elements) if (e.type === 'image') used.add(e.assetId);
+  for (const b of p.story ?? []) if (b.assetId) used.add(b.assetId);
   const ids = Object.keys(p.assets);
   if (ids.every((id) => used.has(id))) return p;
   return { ...p, assets: Object.fromEntries(ids.filter((id) => used.has(id)).map((id) => [id, p.assets[id]])) };
@@ -281,4 +305,96 @@ export function reorderSelection(dir: 'front' | 'back') {
     const rest = pg.elements.filter((e) => !selection.includes(e.id));
     return { ...pg, elements: dir === 'front' ? [...rest, ...sel] : [...sel, ...rest] };
   }));
+}
+
+// ---- 원고(자동 조판) ----
+const mapStory = (p: Project, fn: (story: Block[]) => Block[]): Project => ({ ...p, story: fn(p.story ?? []) });
+
+export function patchBlock(id: string, patch: Partial<Block>, coalesce?: string) {
+  mutate((p) => mapStory(p, (st) => st.map((b) => (b.id === id ? { ...b, ...patch } : b))), { coalesce });
+}
+
+/** 커서 위치에서 문단을 둘로 나눈다. 제목 뒤에는 본문 문단이 이어진다. */
+export function splitBlock(id: string, pos: number) {
+  const b = get().project?.story?.find((x) => x.id === id);
+  if (!b) return;
+  const tail = makeBlock(b.style === 'chapter' || b.style === 'section' ? 'body' : b.style, b.text.slice(pos));
+  mutate((p) => mapStory(p, (st) => st.flatMap((x) => (x.id === id ? [{ ...x, text: x.text.slice(0, pos) }, tail] : [x]))));
+  set({ focus: { id: tail.id, caret: 0 } });
+}
+
+/** 문단을 앞 문단에 이어 붙인다. */
+export function mergeBlockUp(id: string) {
+  const story = get().project?.story ?? [];
+  const i = story.findIndex((x) => x.id === id);
+  if (i <= 0 || story[i - 1].assetId) return;
+  const prev = story[i - 1];
+  mutate((p) => mapStory(p, (st) => st.flatMap((x) => (x.id === id ? [] : x.id === prev.id ? [{ ...x, text: x.text + story[i].text }] : [x]))));
+  set({ focus: { id: prev.id, caret: prev.text.length }, selectedBlock: null });
+}
+
+export function insertBlockAfter(afterId: string | null, block: Block) {
+  mutate((p) => mapStory(p, (st) => {
+    const i = afterId ? st.findIndex((x) => x.id === afterId) : -1;
+    return i < 0 ? [...st, block] : [...st.slice(0, i + 1), block, ...st.slice(i + 1)];
+  }));
+  if (!block.assetId) set({ focus: { id: block.id, caret: 0 } });
+}
+
+export function insertStoryImage(afterId: string | null, asset: Asset) {
+  const block = makeBlock('body', '', { assetId: asset.id });
+  mutate((p) => mapStory({ ...p, assets: { ...p.assets, [asset.id]: asset } }, (st) => {
+    const i = afterId ? st.findIndex((x) => x.id === afterId) : -1;
+    return i < 0 ? [...st, block] : [...st.slice(0, i + 1), block, ...st.slice(i + 1)];
+  }));
+}
+
+export function removeBlock(id: string) {
+  mutate((p) => pruneAssets(mapStory(p, (st) => st.filter((x) => x.id !== id))));
+  if (get().selectedBlock === id) set({ selectedBlock: null });
+}
+
+export function patchStyle(name: StyleName, patch: Partial<ParaStyle>, key: string) {
+  mutate((p) => (p.styles ? { ...p, styles: { ...p.styles, [name]: { ...p.styles[name], ...patch } } } : p), { coalesce: `style:${name}:${key}` });
+}
+
+export function patchMaster(fn: (m: Master) => Master, key: string) {
+  mutate((p) => (p.master ? { ...p, master: fn(p.master) } : p), { coalesce: `master:${key}` });
+}
+
+export function patchToc(patch: Partial<TocSettings>, key: string) {
+  mutate((p) => (p.toc ? { ...p, toc: { ...p.toc, ...patch } } : p), { coalesce: `toc:${key}` });
+}
+
+export function applyTemplate(id: string) {
+  mutate((p) => ({ ...p, ...templateCopy(id) }));
+}
+
+/** 차례 쪽을 본문 앞에 넣는다. 내용과 쪽 번호는 원고에서 자동으로 만들어진다. */
+export function addTocPage() {
+  const { project } = get();
+  if (!project?.story || project.pages.some((p) => p.kind === 'toc')) return;
+  const firstFlow = project.pages.findIndex((p) => p.kind === 'flow');
+  const at = firstFlow < 0 ? project.pages.length : firstFlow;
+  mutate((p) => ({ ...p, pages: [...p.pages.slice(0, at), makePage('toc'), ...p.pages.slice(at)] }));
+  set({ currentPage: at, selection: [], editingId: null, selectedBlock: null });
+}
+
+export function patchPage(index: number, patch: Partial<Page>) {
+  mutate((p) => ({ ...p, pages: p.pages.map((pg, i) => (i === index ? { ...pg, ...patch } : pg)) }));
+}
+
+/** 문단이 놓인 쪽으로 이동한다. */
+export function goToBlock(id: string) {
+  const { project } = get();
+  if (!project) return;
+  const d = derive(project);
+  const fi = d.pagination?.blockPage.get(id);
+  const page = d.flowIndex.indexOf(fi ?? -2);
+  set({ centerView: 'pages', selectedBlock: id, selection: [], editingId: null, ...(page >= 0 ? { currentPage: page } : {}) });
+}
+
+export function openManuscript(blockId?: string | null) {
+  const b = get().project?.story?.find((x) => x.id === blockId);
+  set({ centerView: 'manuscript', selection: [], editingId: null, focus: b && !b.assetId ? { id: b.id, caret: b.text.length } : null });
 }

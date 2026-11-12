@@ -2,84 +2,98 @@ import { useEffect, useRef, useState } from 'react';
 import hbWasmUrl from 'harfbuzzjs/dist/harfbuzz-subset.wasm?url';
 import { browserRasterize, exportPdf } from '../engine/pdf';
 import { resolveText } from '../engine/render';
-import { uid } from '../model/factory';
+import { derive } from '../engine/flow';
 import { presetName } from '../model/presets';
-import type { Asset, Project } from '../model/types';
+import type { Project } from '../model/types';
 import { downloadBlob, safeFilename } from '../store/storage';
 import {
-  addImage, addPage, addTextBox, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
+  addImage, addPage, addTextBox, addTocPage, openManuscript, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
   movePage, mutate, notify, pasteClipboard, patchElements, redo, selectPage, undo, useStore,
 } from '../store/store';
 import { Canvas, fitZoom } from './Canvas';
-import { pickFile, readFile } from './fields';
+import { pickImageAsset } from './assets';
+import { Manuscript } from './Manuscript';
 import { PageSvg } from './PageSvg';
 import { RightPanel } from './RightPanel';
 
-const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
-
 async function insertImage() {
-  const file = await pickFile('.jpg,.jpeg,.png,.webp');
-  if (!file) return;
-  if (!IMAGE_TYPES.includes(file.type)) {
-    notify('JPG, PNG, WEBP 이미지만 넣을 수 있어요.', 'error');
-    return;
-  }
-  try {
-    const dataUrl: string = await readFile(file, 'dataUrl');
-    const img = new Image();
-    img.src = dataUrl;
-    await img.decode();
-    const asset: Asset = { id: uid(), name: file.name, mime: file.type, dataUrl, pxW: img.naturalWidth, pxH: img.naturalHeight };
-    addImage(asset);
-  } catch {
-    notify('이미지를 열지 못했어요. 파일이 손상되었을 수 있어요.', 'error');
-  }
+  const asset = await pickImageAsset();
+  if (asset) addImage(asset);
 }
+
+const THUMB_W = 76;
+
+const KIND_LABEL = { flow: '본문', toc: '차례', free: '' } as const;
 
 function Thumbnails({ project }: { project: Project }) {
   const currentPage = useStore((s) => s.currentPage);
   const dragFrom = useRef<number | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
-  const scale = 76 / project.format.width;
+  const [scroll, setScroll] = useState({ top: 0, height: 800 });
+  const list = useRef<HTMLDivElement>(null);
+  const scale = THUMB_W / project.format.width;
+  const rowH = Math.round(project.format.height * scale) + 34;
+  const page = project.pages[currentPage];
+  const auto = page.kind === 'flow' || page.kind === 'toc';
+
   useEffect(() => {
-    document.querySelector(`.thumb[data-index="${currentPage}"]`)?.scrollIntoView({ block: 'nearest' });
-  }, [currentPage]);
+    const el = list.current!;
+    const top = currentPage * rowH;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + rowH - el.clientHeight;
+    setScroll({ top: el.scrollTop, height: el.clientHeight });
+  }, [currentPage, rowH]);
+
+  // 쪽이 수백 개여도 화면에 보이는 썸네일만 그린다
+  const first = Math.max(0, Math.floor(scroll.top / rowH) - 3);
+  const last = Math.min(project.pages.length, Math.ceil((scroll.top + scroll.height) / rowH) + 3);
+
   return (
     <aside className="panel left">
       <div className="panel-head">
         <h3>페이지</h3>
-        <span>{project.pages.length}쪽</span>
+        <span id="page-count">{project.pages.length}쪽</span>
       </div>
-      <div className="thumbs">
-        {project.pages.map((pg, i) => (
-          <div
-            key={pg.id}
-            data-index={i}
-            className={`thumb${i === currentPage ? ' on' : ''}${dropAt === i ? ' drop' : ''}`}
-            draggable
-            onClick={() => selectPage(i)}
-            onDragStart={() => (dragFrom.current = i)}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDropAt(i);
-            }}
-            onDragLeave={() => setDropAt((d) => (d === i ? null : d))}
-            onDrop={() => {
-              if (dragFrom.current !== null) movePage(dragFrom.current, i);
-              dragFrom.current = null;
-              setDropAt(null);
-            }}
-          >
-            <div className="thumb-paper"><PageSvg project={project} pageIndex={i} scale={scale} /></div>
-            <span>{i + 1}</span>
-          </div>
-        ))}
+      <div className="thumbs" ref={list} onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
+        <div style={{ height: project.pages.length * rowH, position: 'relative' }}>
+          {project.pages.slice(first, last).map((pg, k) => {
+            const i = first + k;
+            return (
+              <div
+                key={pg.id}
+                data-index={i}
+                className={`thumb${i === currentPage ? ' on' : ''}${dropAt === i ? ' drop' : ''}`}
+                style={{ top: i * rowH, height: rowH }}
+                draggable
+                onClick={() => selectPage(i)}
+                onDragStart={() => (dragFrom.current = i)}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDropAt(i);
+                }}
+                onDragLeave={() => setDropAt((x) => (x === i ? null : x))}
+                onDrop={() => {
+                  if (dragFrom.current !== null) movePage(dragFrom.current, i);
+                  dragFrom.current = null;
+                  setDropAt(null);
+                }}
+              >
+                <div className="thumb-paper"><PageSvg project={project} pageIndex={i} scale={scale} /></div>
+                <span>{i + 1}{KIND_LABEL[pg.kind ?? 'free'] && ` · ${KIND_LABEL[pg.kind ?? 'free']}`}</span>
+              </div>
+            );
+          })}
+        </div>
       </div>
       <div className="panel-foot">
-        <button className="btn" id="add-page" onClick={() => addPage(true)} title="현재 쪽 뒤에 본문 글 상자가 있는 쪽을 추가해요">＋ 본문 쪽</button>
-        <button className="btn" id="add-blank" onClick={() => addPage(false)} title="현재 쪽 뒤에 빈 쪽을 추가해요">＋ 빈 쪽</button>
-        <button className="btn" id="dup-page" onClick={() => duplicatePage(currentPage)}>복제</button>
-        <button className="btn" id="del-page" disabled={project.pages.length <= 1} onClick={() => deletePage(currentPage)}>삭제</button>
+        <button className="btn" id="add-blank" onClick={() => addPage(false)} title="현재 쪽 뒤에 자유롭게 꾸미는 빈 쪽을 추가해요">＋ 빈 쪽</button>
+        <button className="btn" id="add-page" onClick={() => addPage(true)} title="현재 쪽 뒤에 글 상자가 있는 쪽을 추가해요">＋ 글 상자</button>
+        {project.story && !project.pages.some((p) => p.kind === 'toc') && (
+          <button className="btn wide" id="add-toc" onClick={addTocPage} title="장·절 제목과 쪽 번호로 차례를 자동으로 만들어요">＋ 차례 (자동)</button>
+        )}
+        <button className="btn" id="dup-page" disabled={auto} onClick={() => duplicatePage(currentPage)} title={auto ? '자동으로 만들어지는 쪽은 복제할 수 없어요' : ''}>복제</button>
+        <button className="btn" id="del-page" disabled={project.pages.length <= 1 || page.kind === 'flow'} onClick={() => deletePage(currentPage)}
+          title={page.kind === 'flow' ? '본문 쪽은 원고 분량에 따라 자동으로 만들어져요. 원고를 줄이면 쪽도 줄어요.' : ''}>삭제</button>
         <button className="btn" disabled={currentPage === 0} onClick={() => movePage(currentPage, currentPage - 1)}>↑ 앞으로</button>
         <button className="btn" disabled={currentPage === project.pages.length - 1} onClick={() => movePage(currentPage, currentPage + 1)}>↓ 뒤로</button>
       </div>
@@ -99,6 +113,7 @@ export function Editor({ project }: { project: Project }) {
     try {
       const missing = new Set<string>();
       let overflow = 0;
+      derive(project).pagination?.missingFonts.forEach((f) => missing.add(f));
       for (const pg of project.pages) for (const el of pg.elements) if (el.type === 'text') {
         const r = resolveText(el);
         if (r?.missingFont) missing.add(el.style.fontFamily);
@@ -150,7 +165,7 @@ export function Editor({ project }: { project: Project }) {
         useStore.setState({ selection: st.project!.pages[st.currentPage].elements.map((x) => x.id) });
       }
       else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection();
-      else if (e.key === 'Escape') useStore.setState({ selection: [] });
+      else if (e.key === 'Escape') useStore.setState({ selection: [], selectedBlock: null });
       else if (e.key === 'PageDown') selectPage(st.currentPage + 1);
       else if (e.key === 'PageUp') selectPage(st.currentPage - 1);
       else if (e.key.startsWith('Arrow') && st.selection.length) {
@@ -185,9 +200,15 @@ export function Editor({ project }: { project: Project }) {
           <button className="btn ghost" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)">다시 실행</button>
         </div>
         <div className="group">
-          <button className="btn" id="add-text" onClick={addTextBox}>글 상자</button>
-          <button className="btn" id="add-image" onClick={insertImage}>이미지</button>
+          <button className="btn" id="add-text" disabled={s.centerView !== 'pages'} onClick={addTextBox}>글 상자</button>
+          <button className="btn" id="add-image" disabled={s.centerView !== 'pages'} onClick={insertImage}>이미지</button>
         </div>
+        {project.story && (
+          <div className="segmented small" id="view-switch">
+            <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null })}>페이지</button>
+            <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고</button>
+          </div>
+        )}
         <div className="spacer" />
         <button className="btn ghost" id="save-file" onClick={exportProjectFile} title="편집 가능한 프로젝트 파일(.bookstudio)로 내보내요">프로젝트 파일로 저장</button>
         <button className="btn primary" id="export-pdf" disabled={exporting} onClick={doExportPdf}>{exporting ? 'PDF 만드는 중…' : 'PDF 내보내기'}</button>
@@ -195,7 +216,7 @@ export function Editor({ project }: { project: Project }) {
 
       <div className="workspace">
         <Thumbnails project={project} />
-        <Canvas project={project} />
+        {s.centerView === 'manuscript' && project.story ? <Manuscript project={project} /> : <Canvas project={project} />}
         <RightPanel project={project} />
       </div>
 

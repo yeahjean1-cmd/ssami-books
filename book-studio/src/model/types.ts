@@ -49,9 +49,68 @@ export interface ImageElement extends BaseElement {
 
 export type PageElement = TextElement | ImageElement;
 
+/**
+ * free: 자유 배치 쪽 / flow: 원고가 자동으로 흘러 들어가는 본문 쪽 / toc: 자동 목차 쪽.
+ * flow·toc 쪽의 내용은 원고에서 계산되며, elements에는 사용자가 덧붙인 요소만 담긴다.
+ */
+export type PageKind = 'free' | 'flow' | 'toc';
+
 export interface Page {
   id: string;
+  kind?: PageKind;
+  /** 쪽 번호·머리말 같은 공통 요소를 이 쪽에서 숨긴다 */
+  hideMaster?: boolean;
   elements: PageElement[];
+}
+
+export type StyleName = 'chapter' | 'section' | 'body' | 'quote';
+
+/** 문단 스타일. 원고의 모든 문단은 이름으로 스타일을 참조하므로 스타일을 고치면 책 전체에 반영된다. */
+export interface ParaStyle extends TextStyle {
+  /** 문단 앞 간격 mm (쪽 맨 위에서는 새 쪽에서 시작하는 스타일에만 적용) */
+  spaceBefore: number;
+  /** 문단 뒤 간격 mm */
+  spaceAfter: number;
+  /** 좌우 들여 넣기 mm */
+  inset: number;
+  /** 항상 새 쪽에서 시작 */
+  breakBefore: boolean;
+}
+
+export interface Block {
+  id: string;
+  style: StyleName;
+  text: string;
+  /** 본문 사이에 들어가는 이미지 */
+  assetId?: string;
+  /** 사용자가 고정한 쪽 나눔: 이 문단은 새 쪽에서 시작한다 */
+  breakBefore?: boolean;
+}
+
+export type RunningText = 'none' | 'title' | 'chapter' | 'author';
+
+/** 여러 쪽에 공통으로 들어가는 요소(마스터) */
+export interface Master {
+  pageNumber: {
+    show: boolean;
+    position: 'bottom-center' | 'bottom-outside';
+    format: 'arabic' | 'roman';
+    /** 쪽 번호를 매기기 시작하는 쪽(1부터) */
+    firstPage: number;
+    /** 시작 번호 */
+    startAt: number;
+  };
+  header: { show: boolean; left: RunningText; right: RunningText };
+  fontFamily: string;
+  /** pt */
+  fontSize: number;
+  color: string;
+}
+
+export interface TocSettings {
+  title: string;
+  includeSections: boolean;
+  leader: boolean;
 }
 
 export interface Asset {
@@ -84,6 +143,12 @@ export interface Project {
   margins: Margins;
   pages: Page[];
   assets: Record<string, Asset>;
+  /** 자동 조판되는 원고. 없으면 자유 배치 쪽만 있는 책이다. */
+  story?: Block[];
+  styles?: Record<StyleName, ParaStyle>;
+  master?: Master;
+  toc?: TocSettings;
+  templateId?: string;
 }
 
 export interface Rect {
