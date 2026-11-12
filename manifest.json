@@ -1,11 +1,11 @@
 {
-  "name": "쌈이책방",
-  "short_name": "쌈이책방",
+  "name": "모두의책방",
+  "short_name": "모두의책방",
   "start_url": ".",
   "display": "standalone",
-  "background_color": "#F7F6F2",
-  "theme_color": "#F7F6F2",
-  "description": "TXT 파일을 책처럼 읽고 친구와 함께 읽는 독서 앱",
+  "background_color": "#F6F7FB",
+  "theme_color": "#2563EB",
+  "description": "TXT 를 책처럼 읽고, 마음에 남은 문장을 기록하고 나누는 독서 공간",
   "orientation": "any",
   "prefer_related_applications": false,
   "icons": [
