@@ -208,6 +208,8 @@ export interface Project {
   baselineGrid?: boolean;
   /** 각주 번호: 쪽마다 1부터(기본) 또는 책 전체에 이어서 */
   footnoteNumbering?: 'page' | 'book';
+  /** 장 시작 쪽 꾸밈: 제목 아래 가는 선 또는 제목 위 큰 장 번호 */
+  chapterOpener?: 'rule' | 'number';
 }
 
 export interface Rect {

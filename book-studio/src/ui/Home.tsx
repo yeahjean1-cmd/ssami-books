@@ -7,7 +7,7 @@ import { assetFromDataUrl } from './assets';
 import { HelpDialog } from './Support';
 import { CUSTOM_PRESET_ID, FORMAT_PRESETS, presetName, recommendedMargins } from '../model/presets';
 import { deleteProject, listProjects, loadProject, saveProject, type ProjectSummary } from '../store/storage';
-import { notify, openProject } from '../store/store';
+import { confirmDialog, notify, openProject } from '../store/store';
 import { NumField, Segmented, pickFile, readFile } from './fields';
 
 async function openFromFile(refresh: () => void) {
@@ -278,7 +278,7 @@ export function Home() {
     }
   };
   const remove = async (s: ProjectSummary) => {
-    if (!confirm(`‘${s.title}’을(를) 삭제할까요? 삭제하면 되돌릴 수 없어요.`)) return;
+    if (!(await confirmDialog(`‘${s.title}’을(를) 삭제할까요? 삭제하면 되돌릴 수 없어요.`, '삭제'))) return;
     await deleteProject(s.id);
     refresh();
   };

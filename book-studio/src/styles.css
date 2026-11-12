@@ -337,3 +337,13 @@ h2, h3, p { margin: 0; }
 .project-card .cover[style*="color"] span { color: inherit; opacity: .8; }
 .stage3d { perspective: 3200px; }
 .face { box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .1); }
+
+/* 아이콘·확인 창 */
+.icon { display: block; flex: none; }
+.btn:has(> .icon) { display: inline-flex; align-items: center; gap: 6px; }
+.btn.icon { padding: 6px 8px; }
+.segmented button:has(> .icon) { display: grid; place-items: center; padding: 8px 6px; }
+.modal-back.top { z-index: 40; }
+.modal.confirm { width: min(420px, 100%); padding: 24px 24px 18px; gap: 20px; }
+.modal.confirm p { line-height: 1.7; word-break: keep-all; }
+.cover-templates { grid-template-columns: repeat(4, 1fr); row-gap: 22px; }

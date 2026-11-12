@@ -10,6 +10,7 @@ import {
 import { Canvas, MasterView, fitZoom } from './Canvas';
 import { BookPreview, Layers } from './Extras';
 import { pickImageAsset } from './assets';
+import { Icon } from './fields';
 import { CoverView } from './CoverView';
 import { Manuscript } from './Manuscript';
 import { ExportDialog, PreflightDialog, usePreflight } from './PrintDialogs';
@@ -179,8 +180,8 @@ export function Editor({ project }: { project: Project }) {
           onChange={(e) => mutate((p) => ({ ...p, meta: { ...p.meta, title: e.target.value } }), { coalesce: 'meta:title' })}
         />
         <div className="group">
-          <button className="btn ghost icon" id="undo" disabled={!s.past.length} onClick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
-          <button className="btn ghost icon" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
+          <button className="btn ghost icon" id="undo" disabled={!s.past.length} onClick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소"><Icon name="undo" /></button>
+          <button className="btn ghost icon" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행"><Icon name="redo" /></button>
         </div>
         <div className="spacer" />
         {/* 작업 단계: 책을 만드는 순서대로 놓는다 */}
@@ -192,9 +193,9 @@ export function Editor({ project }: { project: Project }) {
         </nav>
         <div className="spacer" />
         <div className="group insert" aria-label="넣기">
-          <button className="btn" id="add-text" disabled={!canPlace} onClick={addTextBox}>글 상자</button>
-          <button className="btn" id="add-image" disabled={!canPlace} onClick={insertImage}>이미지</button>
-          <button className="btn" id="add-rect" disabled={!canPlace} onClick={addRect}>도형</button>
+          <button className="btn" id="add-text" disabled={!canPlace} onClick={addTextBox}><Icon name="text" />글 상자</button>
+          <button className="btn" id="add-image" disabled={!canPlace} onClick={insertImage}><Icon name="image" />이미지</button>
+          <button className="btn" id="add-rect" disabled={!canPlace} onClick={addRect}><Icon name="shape" />도형</button>
         </div>
         {project.cover && <button className="btn ghost" id="open-preview" onClick={() => setDialog('preview')}>책 미리보기</button>}
         <div className="more">

@@ -129,8 +129,8 @@ await page.click('#undo');
 
 // 템플릿 적용
 await page.click('#canvas', { position: { x: 5, y: 5 } });
-page.once('dialog', (d) => d.accept());
 await page.click('#right-panel [data-template="practical"]');
+await page.click('#confirm-ok');
 const practical = await pageCount();
 assert(practical !== total, `템플릿을 바꾸면 다시 조판됨 (${total} → ${practical}쪽)`);
 await page.click('#undo');

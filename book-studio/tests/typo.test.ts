@@ -151,3 +151,27 @@ describe('밑줄·취소선, 연속 각주 번호, RTF', () => {
     expect(() => importRtf(new TextEncoder().encode('plain'))).toThrow();
   });
 });
+
+describe('장 시작 쪽 꾸밈', () => {
+  const story = ['프롤로그', '제1장 골목', '제2장 강', '에필로그'].flatMap((t) => [makeBlock('chapter', t), ...Array.from({ length: 6 }, () => makeBlock('body', para.repeat(3)))]);
+  const base = syncPages(createProject({
+    title: '꾸밈', subtitle: '', author: '', publisher: '', presetId: 'shinkuk', width: 152, height: 225, duplex: true, binding: 'left',
+    margins: recommendedMargins(152, 225), templateId: 'essay', imported: { blocks: story, assets: {} },
+  }), uid);
+  const opener = (p: typeof base, id: string) => derivedContent(p, p.pages.findIndex((pg, i) => pg.kind === 'flow' && derivedContent(p, i).texts.some((t) => t.blockId === id)));
+
+  it('장 번호: 프롤로그·에필로그는 세지 않고 본 장에만 1, 2를 붙인다', () => {
+    const p = { ...base, chapterOpener: 'number' as const };
+    const num = (i: number) => opener(p, story[i * 7].id).texts.find((t) => t.key.startsWith('ch-'))?.lines[0].runs[0].text;
+    expect([num(0), num(1), num(2), num(3)]).toEqual([undefined, '1', '2', undefined]);
+  });
+
+  it('가는 선: 장 제목 바로 아래에 긋는다', () => {
+    const p = { ...base, chapterOpener: 'rule' as const };
+    const dc = opener(p, story[7].id);
+    const title = dc.texts.find((t) => t.blockId === story[7].id)!;
+    expect(dc.rules.length).toBe(1);
+    expect(dc.rules[0].y).toBeCloseTo(title.y + title.h + 4, 6);
+    expect(opener(base, story[7].id).rules.length).toBe(0);
+  });
+});

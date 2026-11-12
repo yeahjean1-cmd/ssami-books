@@ -43,7 +43,7 @@ export function NumField({ label, value, onChange, min = -Infinity, max = Infini
 
 export function Segmented<T extends string>({ value, options, onChange, label }: {
   value: T;
-  options: { value: T; label: string }[];
+  options: { value: T; label: React.ReactNode; title?: string }[];
   onChange: (v: T) => void;
   label?: string;
 }) {
@@ -52,12 +52,33 @@ export function Segmented<T extends string>({ value, options, onChange, label }:
       {label && <span>{label}</span>}
       <div className="segmented" role="group" aria-label={label}>
         {options.map((o) => (
-          <button key={o.value} type="button" className={o.value === value ? 'on' : ''} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
+          <button key={o.value} type="button" className={o.value === value ? 'on' : ''} aria-pressed={o.value === value} title={o.title} aria-label={o.title} onClick={() => onChange(o.value)}>
             {o.label}
           </button>
         ))}
       </div>
     </div>
+  );
+}
+
+const ICONS: Record<string, string> = {
+  text: 'M3 4h10M8 4v9M6 13h4',
+  image: 'M2.5 3.5h11v9h-11zM2.5 10.5l3.5-3 3 2.5 2-1.5 2.5 2',
+  shape: 'M2.5 7.5h6v6h-6zM13.5 6a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z',
+  undo: 'M5.5 3.5l-3 3 3 3M2.5 6.5H9a4 4 0 0 1 0 8H7',
+  redo: 'M10.5 3.5l3 3-3 3M13.5 6.5H7a4 4 0 0 0 0 8h2',
+  left: 'M2.5 4h11M2.5 8h7M2.5 12h9',
+  center: 'M2.5 4h11M4.5 8h7M3.5 12h9',
+  right: 'M2.5 4h11M6.5 8h7M4.5 12h9',
+  justify: 'M2.5 4h11M2.5 8h11M2.5 12h11',
+};
+
+/** 선으로 그린 16px 아이콘. 글자색을 따른다. */
+export function Icon({ name }: { name: keyof typeof ICONS | string }) {
+  return (
+    <svg className="icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={ICONS[name]} />
+    </svg>
   );
 }
 

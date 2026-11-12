@@ -90,13 +90,16 @@ export function coverAsProject(project: Project): Project {
   };
 }
 
-export interface CoverTemplate { id: string; name: string; hint: string; background: string; ink: string; band?: string }
+export interface CoverTemplate { id: string; name: string; hint: string; background: string; ink: string; band?: string; layout?: 'split' | 'frame' | 'left' }
 
 export const COVER_TEMPLATES: CoverTemplate[] = [
   { id: 'minimal', name: '미니멀', hint: '밝은 종이색, 명조 제목', background: '#f4efe6', ink: '#2b2a28' },
   { id: 'band', name: '색 띠', hint: '흰 바탕에 색 띠', background: '#ffffff', ink: '#2b2a28', band: '#7a8b72' },
   { id: 'dark', name: '짙은 바탕', hint: '차콜 바탕, 밝은 글자', background: '#2b2a28', ink: '#f4efe6' },
   { id: 'essay', name: '에세이', hint: '따뜻한 브라운 바탕', background: '#8b6f54', ink: '#fffaf2' },
+  { id: 'split', name: '반반', hint: '위는 색 면, 아래는 제목', background: '#f6f2ea', ink: '#2b2a28', band: '#4d6a7a', layout: 'split' },
+  { id: 'frame', name: '액자', hint: '가는 테두리 안에 제목', background: '#fbf8f1', ink: '#3a332b', band: '#8b6f54', layout: 'frame' },
+  { id: 'left', name: '왼쪽 정렬', hint: '짧은 선과 왼쪽 정렬 제목', background: '#eef0ea', ink: '#26302a', band: '#26302a', layout: 'left' },
 ];
 
 const text = (r: Rect, t: string, s: Partial<TextStyle>, extra: Partial<PageElement> = {}): PageElement => ({
@@ -106,6 +109,38 @@ const text = (r: Rect, t: string, s: Partial<TextStyle>, extra: Partial<PageElem
     paraSpacing: 0, indent: 0, wordBreak: 'word', ...s,
   },
 });
+
+/** 세로쓰기 책등 글: 글자를 한 줄에 하나씩 세워 쌓는다. x는 책등 가운데 기준. */
+export function spineStacked(textValue: string, H: number, style: Partial<TextStyle>): PageElement {
+  const size = style.fontSize ?? 9;
+  const lineHeight = 1.12;
+  const chars = Array.from(textValue.replace(/\n/g, ''));
+  const w = size * 0.3528 * 1.7;
+  const h = Math.min(H - 20, chars.length * size * 0.3528 * lineHeight + 1);
+  return text({ x: -w / 2, y: (H - h) / 2, w, h }, chars.join('\n'), { ...style, fontSize: size, lineHeight, align: 'center' }, { spine: true });
+}
+
+/** 눕혀 쓰는 책등 글: 위에서 아래로 읽히도록 90도 돌린다. */
+export function spineRotated(textValue: string, H: number, style: Partial<TextStyle>): PageElement {
+  const len = H * 0.6;
+  return text({ x: -len / 2, y: H / 2 - 3, w: len, h: 6 }, textValue.replace(/\n/g, ''), { ...style, lineHeight: 1.2, align: 'center' }, { rotation: 90, spine: true });
+}
+
+/** 책등의 글 요소를 세로쓰기 ↔ 눕혀 쓰기로 바꾼다. */
+export function convertSpine(cover: Cover, H: number, vertical: boolean): Cover {
+  return {
+    ...cover,
+    elements: cover.elements.map((el) => {
+      if (!el.spine || el.type !== 'text') return el;
+      const isVertical = !el.rotation;
+      if (isVertical === vertical) return el;
+      const made = vertical ? spineStacked(el.text, H, el.style) : spineRotated(el.text.replace(/\n\n/g, ' '), H, el.style);
+      return { ...made, id: el.id };
+    }),
+  };
+}
+
+export const spineIsVertical = (cover: Cover) => cover.elements.some((el) => el.spine && el.type === 'text' && !el.rotation);
 
 /** 템플릿으로 표지를 만든다. 모든 요소는 만든 뒤 자유롭게 고칠 수 있다. */
 export function makeCover(project: Project, templateId: string, keep?: Cover): Cover {
@@ -119,20 +154,43 @@ export function makeCover(project: Project, templateId: string, keep?: Cover): C
   const bx = leftBound ? -W : 0;
   const { title, subtitle, author, publisher } = project.meta;
   const titleSize = Math.max(18, Math.round(W / 5.5));
+  const titleH = titleSize * 0.3528 * 1.35 * 2;
+  const over = 5; // 책 바깥쪽 재단선을 넘어 도련까지 채우는 여분
+  const rect = (x: number, y: number, w: number, h: number, fill: string): PageElement => ({ id: uid(), type: 'rect', x, y, w, h, fill, opacity: 1 });
+  /** 앞표지 가로 전체(책등 쪽 끝에서 바깥 도련까지)를 덮는 면 */
+  const fullWidth = (y: number, h: number, fill: string) => rect(leftBound ? fx : fx - over, y, W + over, h, fill);
   const els: PageElement[] = [];
-  // 띠는 책 바깥쪽 재단선을 넘어 도련까지 채운다(재단 오차로 흰 틈이 생기지 않게)
-  const over = 5;
-  if (t.band) els.push({ id: uid(), type: 'rect', x: leftBound ? fx : fx - over, y: H * 0.16, w: W + over, h: H * 0.3, fill: t.band, opacity: 1 });
-  const onBand = t.band ? '#ffffff' : t.ink;
-  els.push(text({ x: fx + m, y: H * 0.22, w: W - m * 2, h: titleSize * 0.3528 * 1.35 * 2 }, title, { fontSize: titleSize, bold: true, lineHeight: 1.35, color: onBand }));
-  if (subtitle) els.push(text({ x: fx + m, y: H * 0.22 + titleSize * 0.3528 * 1.35 * 2 + 3, w: W - m * 2, h: 8 }, subtitle, { fontSize: 10.5, color: onBand }));
-  if (author) els.push(text({ x: fx + m, y: H * 0.58, w: W - m * 2, h: 8 }, author, { fontSize: 12, color: t.ink }));
-  if (publisher) els.push(text({ x: fx + m, y: H - m - 6, w: W - m * 2, h: 6 }, publisher, { fontFamily: 'Pretendard', fontSize: 9, color: t.ink }));
+  let titleY = H * 0.22;
+  let titleColor = t.ink;
+  let align: TextStyle['align'] = 'center';
+  let authorY = H * 0.58;
+
+  if (t.layout === 'split') {
+    els.push(fullWidth(-over, H * 0.52 + over, t.band!));
+    titleY = H * 0.58;
+    authorY = H * 0.58 + titleH + 8;
+  } else if (t.layout === 'frame') {
+    els.push(rect(fx + 8, 8, W - 16, H - 16, t.band!), rect(fx + 8.6, 8.6, W - 17.2, H - 17.2, t.background));
+    titleY = H * 0.26;
+  } else if (t.layout === 'left') {
+    els.push(rect(fx + m, H * 0.2, 18, 1.2, t.band!));
+    titleY = H * 0.2 + 7;
+    authorY = titleY + titleH + 6;
+    align = 'left';
+  } else if (t.band) {
+    els.push(fullWidth(H * 0.16, H * 0.3, t.band));
+    titleColor = '#ffffff';
+  }
+
+  els.push(text({ x: fx + m, y: titleY, w: W - m * 2, h: titleH }, title, { fontSize: titleSize, bold: true, lineHeight: 1.35, color: titleColor, align }));
+  if (subtitle && t.layout !== 'left' && t.layout !== 'split') {
+    els.push(text({ x: fx + m, y: titleY + titleH + 3, w: W - m * 2, h: 8 }, subtitle, { fontSize: 10.5, color: titleColor, align }));
+  }
+  if (author) els.push(text({ x: fx + m, y: authorY, w: W - m * 2, h: 8 }, author, { fontSize: 12, color: t.ink, align }));
+  if (publisher) els.push(text({ x: fx + m, y: H - m - 6, w: W - m * 2, h: 6 }, publisher, { fontFamily: 'Pretendard', fontSize: 9, color: t.ink, align }));
   els.push(text({ x: bx + m, y: H * 0.3, w: W - m * 2, h: 40 }, '뒤표지에 넣을 책 소개 글을 써 보세요.', { fontSize: 9.5, lineHeight: 1.8, align: 'left', wordBreak: 'char', color: t.ink }));
-  // 책등 제목: 위에서 아래로 읽히도록 90도 돌린다. x는 책등 가운데 기준.
-  const spineLen = H * 0.6;
-  els.push(text({ x: -spineLen / 2, y: H / 2 - 3, w: spineLen, h: 6 }, [title, author].filter(Boolean).join('   '),
-    { fontSize: 9, lineHeight: 1.2, color: t.ink, bold: true }, { rotation: 90, spine: true }));
+  // 책등 제목: 우리말 책의 관례대로 세로쓰기로 넣는다. 표지 설정에서 눕혀 쓰기로 바꿀 수 있다.
+  els.push(spineStacked([title, author].filter(Boolean).join('  '), H, { fontSize: 9, color: t.ink, bold: true }));
   return {
     background: t.background, elements: els, flap: keep?.flap ?? 0,
     paperId: keep?.paperId ?? 'mojo80', paperThickness: keep?.paperThickness ?? 0.1, spineOverride: keep?.spineOverride,

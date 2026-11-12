@@ -1,6 +1,6 @@
 import { Component, useEffect, useState, type ReactNode } from 'react';
 import { downloadBlob, listSnapshots, safeFilename, type Snapshot } from '../store/storage';
-import { mutate, notify, useStore } from '../store/store';
+import { confirmDialog, mutate, notify, useStore } from '../store/store';
 import type { Project } from '../model/types';
 
 declare const __APP_VERSION__: string;
@@ -80,8 +80,8 @@ export function Versions({ project }: { project: Project }) {
         {list.map((v) => (
           <div key={v.key}>
             <span>{new Date(v.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {v.pageCount}쪽</span>
-            <button className="btn small" onClick={() => {
-              if (!confirm('이 시점의 내용으로 되돌릴까요? (실행 취소로 다시 돌아올 수 있어요)')) return;
+            <button className="btn small" onClick={async () => {
+              if (!(await confirmDialog('이 시점의 내용으로 되돌릴까요? (실행 취소로 다시 돌아올 수 있어요)', '복원'))) return;
               mutate(() => ({ ...v.project }));
               useStore.setState({ selection: [], editingId: null, selectedBlock: null });
               notify('이전 버전으로 되돌렸어요.');
@@ -147,6 +147,33 @@ export function HelpDialog({ onClose }: { onClose: () => void }) {
           </section>
         </div>
         <div className="modal-foot"><div className="spacer" /><button className="btn primary" onClick={onClose}>닫기</button></div>
+      </div>
+    </div>
+  );
+}
+
+export function ConfirmHost() {
+  const c = useStore((s) => s.confirm);
+  useEffect(() => {
+    if (!c) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') c.resolve(false);
+      if (e.key === 'Enter') c.resolve(true);
+      e.stopPropagation();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [c]);
+  if (!c) return null;
+  return (
+    <div className="modal-back top" onPointerDown={(e) => e.target === e.currentTarget && c.resolve(false)}>
+      <div className="modal confirm" role="alertdialog" aria-label="확인" id="confirm">
+        <p>{c.text}</p>
+        <div className="row">
+          <div className="spacer" />
+          <button className="btn" id="confirm-cancel" onClick={() => c.resolve(false)}>취소</button>
+          <button className="btn primary" id="confirm-ok" autoFocus onClick={() => c.resolve(true)}>{c.ok}</button>
+        </div>
       </div>
     </div>
   );

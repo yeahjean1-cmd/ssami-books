@@ -448,6 +448,20 @@ function masterTexts(project: Project, d: Derived, pageIndex: number): PlacedTex
 export interface DerivedPage { texts: PlacedText[]; images: PlacedImage[]; rules: Rect[] }
 const pageCache = new WeakMap<Project, Map<number, DerivedPage>>();
 
+const UNNUMBERED = /^(프롤로그|에필로그|들어가|나가며|나오는|머리말|맺음말|맺는|서문|후기|작가의|차례|prologue|epilogue)/i;
+const chapterNoCache = new WeakMap<Block[], Map<string, number>>();
+/** 장 번호: 프롤로그·에필로그 같은 장은 세지 않는다. */
+function chapterNumbers(story: Block[]): Map<string, number> {
+  let map = chapterNoCache.get(story);
+  if (!map) {
+    map = new Map();
+    let n = 0;
+    for (const b of story) if (b.style === 'chapter' && !b.assetId && !UNNUMBERED.test(plainText(b.text))) map.set(b.id, ++n);
+    chapterNoCache.set(story, map);
+  }
+  return map;
+}
+
 /** 한 쪽에 자동으로 놓이는 내용(본문 흐름, 목차, 쪽 번호, 머리말) */
 export function derivedContent(project: Project, pageIndex: number): DerivedPage {
   let map = pageCache.get(project);
@@ -474,6 +488,21 @@ export function derivedContent(project: Project, pageIndex: number): DerivedPage
           });
         }
       });
+      // 장 시작 쪽 꾸밈
+      if (project.chapterOpener) {
+        for (const fr of d.pagination.pages[fi] ?? []) {
+          if (fr.block.style !== 'chapter' || fr.block.assetId || d.pagination.blockPage.get(fr.block.id) !== fi) continue;
+          const st = fr.style;
+          const at = (w: number) => c.x + fr.x + (st.align === 'center' ? (fr.w - w) / 2 : st.align === 'right' ? fr.w - w : 0);
+          if (project.chapterOpener === 'rule') rules.push({ x: at(14), y: c.y + fr.y + fr.h + 4, w: 14, h: 0.3 });
+          else {
+            const n = chapterNumbers(project.story!).get(fr.block.id);
+            const size = st.fontSize * 2.4;
+            const num = n && placeLine(`ch-${fr.block.id}`, String(n), { ...st, bold: false, fontSize: size, lineHeight: 1, color: '#b9b2a6' }, c.x + fr.x, c.y + fr.y - size * PT_TO_MM - 3, fr.w);
+            if (num && num.y > 2) texts.push(num);
+          }
+        }
+      }
       // 각주: 본문 영역 맨 아래에 쌓고, 위에 짧은 구분선을 긋는다
       const pageNotes = d.pagination.notes[fi] ?? [];
       if (pageNotes.length) {

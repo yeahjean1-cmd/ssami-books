@@ -2,18 +2,18 @@ import { useState } from 'react';
 import { FontError, inspectFontFile, listFamilies, registerFontData } from '../engine/fonts';
 import { inspectIcc } from '../engine/pdf';
 import { effectiveDpi, resolveText } from '../engine/render';
-import { COVER_TEMPLATES, PAPERS, bleedOf, computedSpine, coverGeom } from '../model/cover';
+import { COVER_TEMPLATES, PAPERS, bleedOf, computedSpine, convertSpine, coverGeom, spineIsVertical } from '../model/cover';
 import { round1 } from '../engine/units';
 import { presetName } from '../model/presets';
 import { STYLE_LABEL, STYLE_NAMES, TEMPLATES } from '../model/templates';
 import type { BindingType, Block, ImageElement, RectElement, Master, PageElement, ParaStyle, Project, RunningText, StyleName, TextElement, TextStyle } from '../model/types';
 import { saveFont } from '../store/storage';
 import {
-  setExpert, applyShopProfile, applyTemplate, applyUserTemplate, deleteShopProfile, deleteUserTemplate, saveShopProfile, saveUserTemplate, shopProfiles, userTemplates,
+  confirmDialog, setExpert, applyShopProfile, applyTemplate, applyUserTemplate, deleteShopProfile, deleteUserTemplate, saveShopProfile, saveUserTemplate, shopProfiles, userTemplates,
   createCover, mutate, notify, patchCover, patchPrint, surfaceOf, openManuscript, patchBlock, patchElements, patchMaster, patchPage, patchStyle, patchToc,
   reorderSelection, useStore,
 } from '../store/store';
-import { NumField, Segmented, pickFile, readFile } from './fields';
+import { Icon, NumField, Segmented, pickFile, readFile } from './fields';
 import { NameSave } from './Extras';
 import { Versions } from './Support';
 import { useFontsVersion } from './PageSvg';
@@ -102,7 +102,7 @@ function StyleControls({ s, set, flow }: { s: TextStyle; set: (patch: Partial<Te
       <section>
         <h3>문단</h3>
         <Segmented label="정렬" value={s.align} onChange={(align) => set({ align }, 'align')}
-          options={[{ value: 'left', label: '왼쪽' }, { value: 'center', label: '가운데' }, { value: 'right', label: '오른쪽' }, { value: 'justify', label: '양쪽' }]} />
+          options={[{ value: 'left', label: <Icon name="left" />, title: '왼쪽 정렬' }, { value: 'center', label: <Icon name="center" />, title: '가운데 정렬' }, { value: 'right', label: <Icon name="right" />, title: '오른쪽 정렬' }, { value: 'justify', label: <Icon name="justify" />, title: '양쪽 정렬' }]} />
         <div className="grid2">
           <NumField label="첫 줄 들여쓰기" unit="mm" value={s.indent} min={0} max={50} step={0.5} onChange={(indent) => set({ indent }, 'indent')} />
           {!flow && <NumField label="문단 간격" unit="mm" value={s.paraSpacing} min={0} max={50} step={0.5} onChange={(paraSpacing) => set({ paraSpacing }, 'ps')} />}
@@ -203,8 +203,8 @@ function BookDesign({ project }: { project: Project }) {
         <div className="template-list">
           {TEMPLATES.map((t) => (
             <button key={t.id} data-template={t.id} className={`template${project.templateId === t.id ? ' on' : ''}`}
-              onClick={() => {
-                if (project.templateId === t.id || confirm(`‘${t.name}’ 템플릿을 적용할까요? 지금까지 고친 문단 스타일과 쪽 번호 설정이 템플릿 값으로 바뀌어요. (실행 취소로 되돌릴 수 있어요)`)) applyTemplate(t.id);
+              onClick={async () => {
+                if (project.templateId === t.id || await confirmDialog(`‘${t.name}’ 템플릿을 적용할까요? 지금까지 고친 문단 스타일과 쪽 번호 설정이 템플릿 값으로 바뀌어요. (실행 취소로 되돌릴 수 있어요)`)) applyTemplate(t.id);
               }}>
               <b>{t.name}</b><small>{t.hint}</small>
             </button>
@@ -223,6 +223,8 @@ function BookDesign({ project }: { project: Project }) {
           </div>
         )}
         <NameSave id="tpl-name" placeholder="지금 디자인의 이름" label="내 템플릿으로 저장" onSave={saveUserTemplate} />
+        <Segmented label="장 시작 쪽 꾸밈" value={project.chapterOpener ?? 'none'} onChange={(v) => mutate((p) => ({ ...p, chapterOpener: v === 'none' ? undefined : v }))}
+          options={[{ value: 'none', label: '없음' }, { value: 'rule', label: '가는 선' }, { value: 'number', label: '장 번호' }]} />
         <label className="check adv">
           <input id="baseline-grid" type="checkbox" checked={!!project.baselineGrid} onChange={(e) => mutate((p) => ({ ...p, baselineGrid: e.target.checked }))} />
           본문 줄을 기준선 격자에 맞추기
@@ -420,7 +422,7 @@ function CoverProps({ project }: { project: Project }) {
         <div className="template-list">
           {COVER_TEMPLATES.map((t) => (
             <button key={t.id} className="template" data-cover-template={t.id}
-              onClick={() => confirm(`‘${t.name}’ 디자인으로 표지를 다시 만들까요? 지금 표지에 놓은 요소는 사라져요. (실행 취소로 되돌릴 수 있어요)`) && createCover(t.id)}>
+              onClick={async () => (await confirmDialog(`‘${t.name}’ 디자인으로 표지를 다시 만들까요? 지금 표지에 놓은 요소는 사라져요. (실행 취소로 되돌릴 수 있어요)`, '다시 만들기')) && createCover(t.id)}>
               <b>{t.name}</b><small>{t.hint}</small>
             </button>
           ))}
@@ -455,6 +457,8 @@ function CoverProps({ project }: { project: Project }) {
               <input id="spine-manual" type="checkbox" checked={c.spineOverride !== undefined} onChange={(e) => patchCover({ spineOverride: e.target.checked ? calc : undefined }, 'so')} />
               인쇄소가 알려 준 책등 너비 직접 입력
             </label>
+            <Segmented label="책등 글자" value={spineIsVertical(c) ? 'v' : 'r'} onChange={(v) => mutate((p) => (p.cover ? { ...p, cover: convertSpine(p.cover, p.format.height, v === 'v') } : p))}
+              options={[{ value: 'v', label: '세로쓰기' }, { value: 'r', label: '눕혀 쓰기' }]} />
             {c.spineOverride !== undefined && (
               <NumField id="spine-override" label="책등 너비" unit="mm" value={c.spineOverride} min={0} max={100} step={0.5} onChange={(spineOverride) => patchCover({ spineOverride }, 'sov')} />
             )}

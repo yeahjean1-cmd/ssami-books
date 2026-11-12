@@ -5,7 +5,7 @@ import { listFonts } from './store/storage';
 import { useStore } from './store/store';
 import { Editor } from './ui/Editor';
 import { Home } from './ui/Home';
-import { ErrorBoundary, recordError } from './ui/Support';
+import { ConfirmHost, ErrorBoundary, recordError } from './ui/Support';
 import './styles.css';
 
 function App() {
@@ -32,6 +32,7 @@ function App() {
   return (
     <>
       {project ? <Editor project={project} /> : <Home />}
+      <ConfirmHost />
       {toast && <div className={`toast ${toast.kind}`} role="status">{toast.text}</div>}
     </>
   );

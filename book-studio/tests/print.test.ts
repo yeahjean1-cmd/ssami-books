@@ -5,7 +5,7 @@ import { syncPages } from '../src/engine/flow';
 import { registerFontData } from '../src/engine/fonts';
 import { exportPdf, inspectIcc, toCmyk } from '../src/engine/pdf';
 import { preflight } from '../src/engine/preflight';
-import { computedSpine, coverAsProject, coverGeom, fromDisplay, makeCover, toDisplay } from '../src/model/cover';
+import { COVER_TEMPLATES, computedSpine, convertSpine, coverAsProject, coverGeom, fromDisplay, makeCover, spineIsVertical, toDisplay } from '../src/model/cover';
 import { createProject, makeBlock, makeText, uid } from '../src/model/factory';
 import { recommendedMargins } from '../src/model/presets';
 import type { PageElement, Project } from '../src/model/types';
@@ -60,7 +60,19 @@ describe('표지', () => {
 
   it('화면 좌표 ↔ 저장 좌표를 오가도 값이 유지되고, 책등 위로 옮기면 책등 요소가 된다', () => {
     const g = coverGeom(withCover(p, { spineOverride: 14 }));
-    for (const el of p.cover.elements) expect(fromDisplay(toDisplay(el, g), g)).toEqual({ ...el, spine: el.spine ? true : undefined });
+    for (const el of p.cover.elements) {
+      const back = fromDisplay(toDisplay(el, g), g);
+      expect(back.x).toBeCloseTo(el.x, 9); // 소수 좌표는 부동소수점 오차만큼만 달라질 수 있다
+      expect({ ...back, x: 0 }).toEqual({ ...el, x: 0, spine: el.spine ? true : undefined });
+    }
+    // 책등 글자는 세로쓰기 ↔ 눕혀 쓰기로 바꿀 수 있고, 글은 그대로 남는다
+    expect(spineIsVertical(p.cover)).toBe(true);
+    const lying = convertSpine(p.cover, 225, false);
+    expect(spineIsVertical(lying)).toBe(false);
+    const again = convertSpine(lying, 225, true);
+    const spineText = (c: typeof p.cover) => (c.elements.find((e) => e.spine) as any).text.replace(/\s/g, '');
+    expect(spineText(again)).toBe(spineText(p.cover));
+    expect(spineText(lying)).toBe(spineText(p.cover));
     const moved = fromDisplay({ ...toDisplay(p.cover.elements[0], g), x: g.spineX + 2, w: 6 } as PageElement, g);
     expect(moved.spine).toBe(true);
     // 앞뒤 표지에 걸친 요소는 책등만큼 늘어난다
@@ -147,7 +159,7 @@ describe('인쇄 사전 검사', () => {
 
   it('문제없는 책에는 오류가 없고, 표지 템플릿은 그대로 써도 경고가 없다', () => {
     expect(levels(clean, 'error')).toEqual([]);
-    for (const id of ['minimal', 'band', 'dark', 'essay']) {
+    for (const { id } of COVER_TEMPLATES) {
       const thick = { ...clean, cover: { ...makeCover(clean, id), spineOverride: 14 } };
       expect(levels(thick, 'warn').filter((i) => i.cover)).toEqual([]);
     }

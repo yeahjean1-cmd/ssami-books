@@ -30,6 +30,8 @@ interface State {
   libraryVersion: number;
   /** 자세히 모드: 세부 조판·인쇄 설정까지 모두 보여 준다 */
   expert: boolean;
+  /** 화면 안에 띄우는 확인 창 */
+  confirm: { text: string; ok: string; resolve: (v: boolean) => void } | null;
   toast: { text: string; kind: 'info' | 'error' } | null;
 }
 
@@ -53,6 +55,7 @@ export const useStore = create<State>(() => ({
   showGuides: true,
   saveState: 'saved',
   libraryVersion: 0,
+  confirm: null,
   expert: (() => { try { return localStorage.getItem('bs.expert') === '1'; } catch { return false; } })(),
   toast: null,
 }));
@@ -546,4 +549,9 @@ export function setExpert(expert: boolean) {
     /* 저장하지 못해도 이번 실행에서는 적용된다 */
   }
   set({ expert });
+}
+
+/** 되돌리기 어려운 동작 전에 묻는다. 프로그램의 화면 톤에 맞춘 확인 창을 띄운다. */
+export function confirmDialog(text: string, ok = '확인'): Promise<boolean> {
+  return new Promise((resolve) => set({ confirm: { text, ok, resolve: (v) => { set({ confirm: null }); resolve(v); } } }));
 }
