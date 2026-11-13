@@ -1,0 +1,271 @@
+import { useEffect, useRef, useState } from 'react';
+import { derive } from '../engine/flow';
+import { presetName } from '../model/presets';
+import type { Project } from '../model/types';
+import { downloadBlob, safeFilename } from '../store/storage';
+import {
+  addImage, addPage, addRect, addTextBox, addTocPage, openManuscript, surface, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
+  movePage, mutate, notify, pasteClipboard, patchElements, redo, selectPage, undo, useStore,
+} from '../store/store';
+import { Canvas, MasterView, fitZoom, spreadOf } from './Canvas';
+import { BookPreview, Layers } from './Extras';
+import { pickImageAsset } from './assets';
+import { Icon } from './fields';
+import { CoverView } from './CoverView';
+import { Manuscript } from './Manuscript';
+import { ExportDialog, PreflightDialog, usePreflight } from './PrintDialogs';
+import { HelpDialog } from './Support';
+import { PageSvg } from './PageSvg';
+import { RightPanel } from './RightPanel';
+
+async function insertImage() {
+  const asset = await pickImageAsset();
+  if (asset) addImage(asset);
+}
+
+const THUMB_W = 76;
+
+const KIND_LABEL = { flow: '본문', toc: '차례', free: '' } as const;
+
+function Thumbnails({ project }: { project: Project }) {
+  const currentPage = useStore((s) => s.currentPage);
+  const dragFrom = useRef<number | null>(null);
+  const [dropAt, setDropAt] = useState<number | null>(null);
+  const [tab, setTab] = useState<'pages' | 'layers'>('pages');
+  const [scroll, setScroll] = useState({ top: 0, height: 800 });
+  const list = useRef<HTMLDivElement>(null);
+  // 양면 인쇄 책은 실제 책처럼 펼침면으로 보여 준다: 1쪽은 한쪽에 혼자, 그다음부터 두 쪽씩 나란히
+  const paired = project.print.duplex;
+  const cellW = paired ? 62 : THUMB_W;
+  const scale = cellW / project.format.width;
+  const rows: (number | null)[][] = [];
+  const rowOf: number[] = [];
+  project.pages.forEach((_, i) => {
+    if (rowOf[i] !== undefined) return;
+    const row = paired ? spreadOf(project, i) : [i];
+    for (const k of row) if (k !== null) rowOf[k] = rows.length;
+    rows.push(row);
+  });
+  const rowH = Math.round(project.format.height * scale) + 34;
+  const page = project.pages[currentPage];
+  const auto = page.kind === 'flow' || page.kind === 'toc';
+
+  useEffect(() => {
+    const el = list.current!;
+    const top = (rowOf[currentPage] ?? 0) * rowH;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + rowH - el.clientHeight;
+    setScroll({ top: el.scrollTop, height: el.clientHeight });
+  }, [currentPage, rowH]);
+
+  // 쪽이 수백 개여도 화면에 보이는 썸네일만 그린다
+  const first = Math.max(0, Math.floor(scroll.top / rowH) - 3);
+  const last = Math.min(rows.length, Math.ceil((scroll.top + scroll.height) / rowH) + 3);
+
+  return (
+    <aside className="panel left">
+      <div className="panel-head">
+        <div className="tabs">
+          <button className={tab === 'pages' ? 'on' : ''} onClick={() => setTab('pages')}>페이지</button>
+          <button className={tab === 'layers' ? 'on' : ''} id="tab-layers" onClick={() => setTab('layers')}>레이어</button>
+        </div>
+        <span id="page-count">{project.pages.length}쪽</span>
+      </div>
+      {tab === 'layers' && <Layers project={project} />}
+      <div className="thumbs" ref={list} style={{ display: tab === 'pages' ? undefined : 'none' }} onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
+        <div style={{ height: rows.length * rowH, position: 'relative' }}>
+          {rows.slice(first, last).map((row, k) => (
+            <div key={first + k} className="thumb-row" style={{ top: (first + k) * rowH, height: rowH }}>
+              {row.map((i, side) => {
+                if (i === null) return <div key={`gap-${side}`} className="thumb-gap" style={{ width: cellW }} />;
+                const pg = project.pages[i];
+                const kind = KIND_LABEL[pg.kind ?? 'free'];
+                return (
+                  <div
+                    key={pg.id}
+                    data-index={i}
+                    className={`thumb${i === currentPage ? ' on' : ''}${dropAt === i ? ' drop' : ''}`}
+                    draggable
+                    onClick={() => selectPage(i)}
+                    onDragStart={() => (dragFrom.current = i)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDropAt(i);
+                    }}
+                    onDragLeave={() => setDropAt((x) => (x === i ? null : x))}
+                    onDrop={() => {
+                      if (dragFrom.current !== null) movePage(dragFrom.current, i);
+                      dragFrom.current = null;
+                      setDropAt(null);
+                    }}
+                  >
+                    <div className="thumb-paper"><PageSvg project={project} pageIndex={i} scale={scale} /></div>
+                    <span>{i + 1}{kind && <small> {kind}</small>}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="panel-foot" style={{ display: tab === 'pages' ? undefined : 'none' }}>
+        <button className="btn" id="add-blank" onClick={() => addPage(false)} title="현재 쪽 뒤에 자유롭게 꾸미는 빈 쪽을 추가해요">＋ 빈 쪽</button>
+        <button className="btn" id="add-page" onClick={() => addPage(true)} title="현재 쪽 뒤에 글 상자가 있는 쪽을 추가해요">＋ 글 상자</button>
+        {project.story && !project.pages.some((p) => p.kind === 'toc') && (
+          <button className="btn wide" id="add-toc" onClick={addTocPage} title="장·절 제목과 쪽 번호로 차례를 자동으로 만들어요">＋ 차례 (자동)</button>
+        )}
+        <button className="btn" id="dup-page" disabled={auto} onClick={() => duplicatePage(currentPage)} title={auto ? '자동으로 만들어지는 쪽은 복제할 수 없어요' : ''}>복제</button>
+        <button className="btn" id="del-page" disabled={project.pages.length <= 1 || page.kind === 'flow'} onClick={() => deletePage(currentPage)}
+          title={page.kind === 'flow' ? '본문 쪽은 원고 분량에 따라 자동으로 만들어져요. 원고를 줄이면 쪽도 줄어요.' : ''}>삭제</button>
+        <button className="btn" disabled={currentPage === 0} onClick={() => movePage(currentPage, currentPage - 1)}>↑ 앞으로</button>
+        <button className="btn" disabled={currentPage === project.pages.length - 1} onClick={() => movePage(currentPage, currentPage + 1)}>↓ 뒤로</button>
+      </div>
+    </aside>
+  );
+}
+
+const SAVE_LABEL = { saved: '저장됨', dirty: '저장 대기 중…', saving: '저장 중…', error: '저장 실패' } as const;
+
+export function Editor({ project }: { project: Project }) {
+  const s = useStore();
+  const canSpread = project.print.duplex;
+
+  const [dialog, setDialog] = useState<'export' | 'preflight' | 'preview' | 'help' | null>(null);
+  const issues = usePreflight(project);
+  const errors = issues.filter((i) => i.level === 'error').length;
+  const warns = issues.filter((i) => i.level === 'warn').length;
+  const [menu, setMenu] = useState(false);
+  const canPlace = s.centerView === 'pages' || s.centerView === 'master' || (s.centerView === 'cover' && !!project.cover);
+
+  const exportProjectFile = () => {
+    downloadBlob(new Blob([JSON.stringify(project)], { type: 'application/json' }), `${safeFilename(project.meta.title)}.bookstudio`);
+    notify('프로젝트 파일을 저장했어요. 이 파일로 다른 기기에서도 이어서 편집할 수 있어요.');
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      const typing = t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT';
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      if (mod && key === 's') {
+        e.preventDefault();
+        flushSave().then(() => useStore.getState().saveState === 'saved' && notify('저장했어요.'));
+        return;
+      }
+      if (typing) return;
+      const st = useStore.getState();
+      if (mod && key === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+      else if (mod && key === 'y') { e.preventDefault(); redo(); }
+      else if (mod && key === 'c') copySelection();
+      else if (mod && key === 'v') { e.preventDefault(); pasteClipboard(); }
+      else if (mod && key === 'd') { e.preventDefault(); copySelection(); pasteClipboard(); }
+      else if (mod && key === 'a') {
+        e.preventDefault();
+        useStore.setState({ selection: surface().elements.map((x) => x.id) });
+      }
+      else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection();
+      else if (e.key === 'Escape') useStore.setState({ selection: [], selectedBlock: null });
+      else if (e.key === 'PageDown') selectPage(st.currentPage + 1);
+      else if (e.key === 'PageUp') selectPage(st.currentPage - 1);
+      else if (e.key.startsWith('Arrow') && st.selection.length) {
+        e.preventDefault();
+        const d = e.shiftKey ? 5 : 0.5;
+        const dx = e.key === 'ArrowLeft' ? -d : e.key === 'ArrowRight' ? d : 0;
+        const dy = e.key === 'ArrowUp' ? -d : e.key === 'ArrowDown' ? d : 0;
+        const pg = surface();
+        patchElements(pg.pageId, Object.fromEntries(pg.elements.filter((x) => st.selection.includes(x.id))
+          .map((x) => [x.id, { x: x.x + dx, y: x.y + dy }])), { coalesce: 'nudge' });
+      }
+    };
+    const onUnload = () => { flushSave(); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('beforeunload', onUnload);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('beforeunload', onUnload);
+    };
+  }, []);
+
+  return (
+    <div className="editor">
+      <header className="topbar">
+        <button className="btn ghost" id="go-home" onClick={() => closeProject()} title="프로젝트 목록으로">← 내 책</button>
+        <input
+          className="title-input" id="project-title" value={project.meta.title} aria-label="책 제목"
+          onChange={(e) => mutate((p) => ({ ...p, meta: { ...p.meta, title: e.target.value } }), { coalesce: 'meta:title' })}
+        />
+        <div className="group">
+          <button className="btn ghost icon" id="undo" disabled={!s.past.length} onClick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소"><Icon name="undo" /></button>
+          <button className="btn ghost icon" id="redo" disabled={!s.future.length} onClick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행"><Icon name="redo" /></button>
+        </div>
+        <div className="spacer" />
+        {/* 작업 단계: 책을 만드는 순서대로 놓는다 */}
+        <nav className="main-tabs" id="view-switch" aria-label="작업 단계">
+          {project.story && <button className={s.centerView === 'manuscript' ? 'on' : ''} id="view-manuscript" onClick={() => openManuscript(s.selectedBlock)}>원고<small>글 쓰기</small></button>}
+          <button className={s.centerView === 'pages' ? 'on' : ''} id="view-pages" onClick={() => useStore.setState({ centerView: 'pages', focus: null, selection: [], editingId: null })}>페이지<small>본문 디자인</small></button>
+          <button className={s.centerView === 'master' ? 'on' : ''} id="view-master" onClick={() => useStore.setState({ centerView: 'master', selection: [], editingId: null, selectedBlock: null, focus: null })}>공통<small>모든 쪽 배경</small></button>
+          <button className={s.centerView === 'cover' ? 'on' : ''} id="view-cover" onClick={() => useStore.setState({ centerView: 'cover', selection: [], editingId: null, selectedBlock: null, focus: null })}>표지<small>앞·등·뒤</small></button>
+        </nav>
+        <div className="spacer" />
+        <div className="group insert" aria-label="넣기">
+          <button className="btn" id="add-text" disabled={!canPlace} onClick={addTextBox}><Icon name="text" />글 상자</button>
+          <button className="btn" id="add-image" disabled={!canPlace} onClick={insertImage}><Icon name="image" />이미지</button>
+          <button className="btn" id="add-rect" disabled={!canPlace} onClick={addRect}><Icon name="shape" />도형</button>
+        </div>
+        {project.cover && <button className="btn ghost" id="open-preview" onClick={() => setDialog('preview')}>책 미리보기</button>}
+        <div className="more">
+          <button className="btn ghost icon" id="more" aria-label="더 보기" aria-expanded={menu} onClick={() => setMenu(!menu)}>⋯</button>
+          {menu && (
+            <div className="menu" onClick={() => setMenu(false)}>
+              <button id="save-file" onClick={exportProjectFile}>프로젝트 파일로 저장<small>백업하거나 다른 기기로 옮길 때</small></button>
+              <button id="open-help" onClick={() => setDialog('help')}>도움말<small>사용 안내와 진단 정보</small></button>
+            </div>
+          )}
+        </div>
+        <button className="btn primary" id="export-pdf" onClick={() => setDialog('export')}>PDF 내보내기</button>
+      </header>
+
+      <div className="workspace">
+        <Thumbnails project={project} />
+        {s.centerView === 'manuscript' && project.story ? <Manuscript project={project} />
+          : s.centerView === 'cover' ? <CoverView project={project} /> : s.centerView === 'master' ? <MasterView project={project} /> : <Canvas project={project} />}
+        <RightPanel project={project} />
+      </div>
+
+      <footer className="statusbar">
+        <div className="group">
+          <button className="btn ghost small" disabled={s.currentPage === 0} onClick={() => selectPage(s.currentPage - 1)} aria-label="이전 쪽">‹</button>
+          <span id="page-status">{s.currentPage + 1} / {project.pages.length}쪽</span>
+          <button className="btn ghost small" disabled={s.currentPage >= project.pages.length - 1} onClick={() => selectPage(s.currentPage + 1)} aria-label="다음 쪽">›</button>
+        </div>
+        {canSpread && (
+          <div className="segmented small">
+            <button className={s.viewMode === 'single' ? 'on' : ''} onClick={() => { useStore.setState({ viewMode: 'single' }); fitZoom(project); }}>한 쪽</button>
+            <button className={s.viewMode === 'spread' ? 'on' : ''} onClick={() => { useStore.setState({ viewMode: 'spread' }); fitZoom(project); }}>펼침면</button>
+          </div>
+        )}
+        {s.centerView === 'pages' && (
+          <label className="check"><input id="show-bleed" type="checkbox" checked={s.showBleed} onChange={(e) => useStore.setState({ showBleed: e.target.checked })} />도련 보기</label>
+        )}
+        <div className="spacer" />
+        <button className={`preflight-chip small ${errors ? 'error' : warns ? 'warn' : 'ok'}`} id="preflight-status" onClick={() => setDialog('preflight')} title="인쇄 사전 검사 결과 보기">
+          사전 검사 · 오류 {errors} · 경고 {warns}
+        </button>
+        <span>{presetName(project.format.presetId)} {project.format.width} × {project.format.height}mm</span>
+        <div className="group">
+          <button className="btn ghost small" onClick={() => useStore.setState({ zoom: Math.max(0.2, s.zoom / 1.2) })} aria-label="축소">−</button>
+          <span id="zoom-status" className="zoom">{Math.round(s.zoom * 100)}%</span>
+          <button className="btn ghost small" onClick={() => useStore.setState({ zoom: Math.min(4, s.zoom * 1.2) })} aria-label="확대">＋</button>
+          <button className="btn ghost small" onClick={() => fitZoom(project)}>화면에 맞춤</button>
+          <button className="btn ghost small" onClick={() => useStore.setState({ zoom: 1 })} title="실제 인쇄 크기에 가깝게 보여줘요">실제 크기</button>
+        </div>
+        <span id="save-status" className={`save ${s.saveState}`}>{SAVE_LABEL[s.saveState]}</span>
+      </footer>
+      {dialog === 'export' && <ExportDialog project={project} onClose={() => setDialog(null)} onPreflight={() => setDialog('preflight')} />}
+      {dialog === 'preview' && project.cover && <BookPreview project={project} onClose={() => setDialog(null)} />}
+      {dialog === 'help' && <HelpDialog onClose={() => setDialog(null)} />}
+      {dialog === 'preflight' && <PreflightDialog project={project} onClose={() => setDialog(null)} />}
+    </div>
+  );
+}
