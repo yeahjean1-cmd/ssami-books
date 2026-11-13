@@ -4,7 +4,7 @@ import { resolveText } from '../engine/render';
 import { PX_PER_MM } from '../engine/units';
 import { contentRect, isRightHand } from '../model/factory';
 import type { PageElement, Project, Rect, TextElement } from '../model/types';
-import { checkpoint, openManuscript, patchElements, useStore } from '../store/store';
+import { checkpoint, openManuscript, patchElements, selectPage, useStore } from '../store/store';
 import { bleedOf } from '../model/cover';
 import { PageSvg, rotationOf, useFontsVersion } from './PageSvg';
 
@@ -260,8 +260,30 @@ export function Canvas({ project }: { project: Project }) {
   // Ctrl+휠 확대/축소
   useEffect(() => {
     const el = ref.current!;
+    let acc = 0;
+    let last = 0;
     const onWheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      if (!e.ctrlKey && !e.metaKey) {
+        // 휠을 굴리면 앞뒤 쪽(펼침면)으로 넘긴다. 확대해서 화면이 스크롤될 때는 끝까지 스크롤한 뒤에 넘어간다.
+        if ((e.target as HTMLElement).closest('textarea') || Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+        const down = e.deltaY > 0;
+        const canScroll = down ? el.scrollTop + el.clientHeight < el.scrollHeight - 1 : el.scrollTop > 0;
+        if (canScroll) return;
+        e.preventDefault();
+        const now = Date.now();
+        if (now - last < 260) return; // 터치패드의 관성 스크롤로 여러 쪽이 한꺼번에 넘어가지 않게 한다
+        acc = Math.sign(acc) === Math.sign(e.deltaY) ? acc + e.deltaY : e.deltaY;
+        if (Math.abs(acc) < 40) return;
+        acc = 0;
+        last = now;
+        const st = useStore.getState();
+        const p = st.project;
+        if (!p || st.editingId) return;
+        const pair: (number | null)[] = st.viewMode === 'spread' && p.print.duplex ? spreadOf(p, st.currentPage) : [st.currentPage];
+        const shown = pair.filter((x): x is number => x !== null);
+        selectPage(down ? Math.max(...shown) + 1 : Math.min(...shown) - 1);
+        return;
+      }
       e.preventDefault();
       const z = useStore.getState().zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1);
       useStore.setState({ zoom: Math.max(0.2, Math.min(4, z)) });

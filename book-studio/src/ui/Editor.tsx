@@ -7,7 +7,7 @@ import {
   addImage, addPage, addRect, addTextBox, addTocPage, openManuscript, surface, closeProject, copySelection, deletePage, deleteSelection, duplicatePage, flushSave,
   movePage, mutate, notify, pasteClipboard, patchElements, redo, selectPage, undo, useStore,
 } from '../store/store';
-import { Canvas, MasterView, fitZoom } from './Canvas';
+import { Canvas, MasterView, fitZoom, spreadOf } from './Canvas';
 import { BookPreview, Layers } from './Extras';
 import { pickImageAsset } from './assets';
 import { Icon } from './fields';
@@ -34,14 +34,25 @@ function Thumbnails({ project }: { project: Project }) {
   const [tab, setTab] = useState<'pages' | 'layers'>('pages');
   const [scroll, setScroll] = useState({ top: 0, height: 800 });
   const list = useRef<HTMLDivElement>(null);
-  const scale = THUMB_W / project.format.width;
+  // 양면 인쇄 책은 실제 책처럼 펼침면으로 보여 준다: 1쪽은 한쪽에 혼자, 그다음부터 두 쪽씩 나란히
+  const paired = project.print.duplex;
+  const cellW = paired ? 62 : THUMB_W;
+  const scale = cellW / project.format.width;
+  const rows: (number | null)[][] = [];
+  const rowOf: number[] = [];
+  project.pages.forEach((_, i) => {
+    if (rowOf[i] !== undefined) return;
+    const row = paired ? spreadOf(project, i) : [i];
+    for (const k of row) if (k !== null) rowOf[k] = rows.length;
+    rows.push(row);
+  });
   const rowH = Math.round(project.format.height * scale) + 34;
   const page = project.pages[currentPage];
   const auto = page.kind === 'flow' || page.kind === 'toc';
 
   useEffect(() => {
     const el = list.current!;
-    const top = currentPage * rowH;
+    const top = (rowOf[currentPage] ?? 0) * rowH;
     if (top < el.scrollTop) el.scrollTop = top;
     else if (top + rowH > el.scrollTop + el.clientHeight) el.scrollTop = top + rowH - el.clientHeight;
     setScroll({ top: el.scrollTop, height: el.clientHeight });
@@ -49,7 +60,7 @@ function Thumbnails({ project }: { project: Project }) {
 
   // 쪽이 수백 개여도 화면에 보이는 썸네일만 그린다
   const first = Math.max(0, Math.floor(scroll.top / rowH) - 3);
-  const last = Math.min(project.pages.length, Math.ceil((scroll.top + scroll.height) / rowH) + 3);
+  const last = Math.min(rows.length, Math.ceil((scroll.top + scroll.height) / rowH) + 3);
 
   return (
     <aside className="panel left">
@@ -62,34 +73,39 @@ function Thumbnails({ project }: { project: Project }) {
       </div>
       {tab === 'layers' && <Layers project={project} />}
       <div className="thumbs" ref={list} style={{ display: tab === 'pages' ? undefined : 'none' }} onScroll={(e) => setScroll({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
-        <div style={{ height: project.pages.length * rowH, position: 'relative' }}>
-          {project.pages.slice(first, last).map((pg, k) => {
-            const i = first + k;
-            return (
-              <div
-                key={pg.id}
-                data-index={i}
-                className={`thumb${i === currentPage ? ' on' : ''}${dropAt === i ? ' drop' : ''}`}
-                style={{ top: i * rowH, height: rowH }}
-                draggable
-                onClick={() => selectPage(i)}
-                onDragStart={() => (dragFrom.current = i)}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDropAt(i);
-                }}
-                onDragLeave={() => setDropAt((x) => (x === i ? null : x))}
-                onDrop={() => {
-                  if (dragFrom.current !== null) movePage(dragFrom.current, i);
-                  dragFrom.current = null;
-                  setDropAt(null);
-                }}
-              >
-                <div className="thumb-paper"><PageSvg project={project} pageIndex={i} scale={scale} /></div>
-                <span>{i + 1}{KIND_LABEL[pg.kind ?? 'free'] && ` · ${KIND_LABEL[pg.kind ?? 'free']}`}</span>
-              </div>
-            );
-          })}
+        <div style={{ height: rows.length * rowH, position: 'relative' }}>
+          {rows.slice(first, last).map((row, k) => (
+            <div key={first + k} className="thumb-row" style={{ top: (first + k) * rowH, height: rowH }}>
+              {row.map((i, side) => {
+                if (i === null) return <div key={`gap-${side}`} className="thumb-gap" style={{ width: cellW }} />;
+                const pg = project.pages[i];
+                const kind = KIND_LABEL[pg.kind ?? 'free'];
+                return (
+                  <div
+                    key={pg.id}
+                    data-index={i}
+                    className={`thumb${i === currentPage ? ' on' : ''}${dropAt === i ? ' drop' : ''}`}
+                    draggable
+                    onClick={() => selectPage(i)}
+                    onDragStart={() => (dragFrom.current = i)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setDropAt(i);
+                    }}
+                    onDragLeave={() => setDropAt((x) => (x === i ? null : x))}
+                    onDrop={() => {
+                      if (dragFrom.current !== null) movePage(dragFrom.current, i);
+                      dragFrom.current = null;
+                      setDropAt(null);
+                    }}
+                  >
+                    <div className="thumb-paper"><PageSvg project={project} pageIndex={i} scale={scale} /></div>
+                    <span>{i + 1}{kind && <small> {kind}</small>}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
         </div>
       </div>
       <div className="panel-foot" style={{ display: tab === 'pages' ? undefined : 'none' }}>

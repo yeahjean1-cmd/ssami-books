@@ -109,6 +109,19 @@ await page.screenshot({ path: f('3-toc.png') });
 await page.click('.thumb[data-index="3"]');
 await page.waitForTimeout(200);
 await page.screenshot({ path: f('4-flow.png') });
+const row0 = page.locator('.thumb-row').first();
+assert(await row0.locator('.thumb').count() === 1 && (await row0.locator('> *').first().getAttribute('class')).includes('thumb-gap'), '페이지 탭: 1쪽은 오른쪽에 혼자 놓임');
+const row1 = page.locator('.thumb-row').nth(1);
+assert((await row1.locator('.thumb').evaluateAll((els) => els.map((e) => e.dataset.index))).join() === '1,2', '페이지 탭: 2-3쪽이 펼침면으로 나란히');
+const cv = await page.locator('#canvas').boundingBox();
+await page.mouse.move(cv.x + cv.width / 2, cv.y + cv.height / 2);
+await page.mouse.wheel(0, 240);
+await page.waitForTimeout(350);
+assert((await page.textContent('#page-status')).startsWith('6 /'), '가운데에서 휠을 내리면 다음 펼침면(6-7쪽)으로');
+await page.mouse.wheel(0, -240);
+await page.waitForTimeout(350);
+assert((await page.textContent('#page-status')).startsWith('5 /'), '휠을 올리면 이전 펼침면(4-5쪽)으로');
+await page.click('.thumb[data-index="3"]');
 
 // 문단 스타일을 고치면 책 전체가 다시 조판된다
 await page.locator('.page-stage.active .block-hit').nth(2).click();

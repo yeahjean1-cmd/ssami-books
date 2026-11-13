@@ -364,3 +364,10 @@ h2, h3, p { margin: 0; }
 .style-chapter .ms-side select { margin-top: 18px; }
 .ms-folded { border: 1px dashed var(--line); background: var(--bg); color: var(--ink-2); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; margin: 4px 0 8px; }
 .ms-folded:hover { border-color: var(--ink-3); color: var(--ink); }
+
+/* 페이지 탭: 펼침면으로 나란히 */
+.thumb-row { position: absolute; left: 0; right: 0; display: flex; justify-content: center; gap: 2px; padding-top: 6px; }
+.thumbs .thumb { position: static; padding-top: 0; }
+.thumb-gap { flex: none; }
+.thumb small { font-size: 10px; font-weight: 400; color: var(--ink-3); }
+.thumb.on small { color: var(--accent); }
