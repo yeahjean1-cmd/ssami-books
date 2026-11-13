@@ -555,3 +555,12 @@ export function setExpert(expert: boolean) {
 export function confirmDialog(text: string, ok = '확인'): Promise<boolean> {
   return new Promise((resolve) => set({ confirm: { text, ok, resolve: (v) => { set({ confirm: null }); resolve(v); } } }));
 }
+
+/** 문단을 커서 자리에서 둘로 나눈다. 앞뒤 글은 서식 표시가 각각 온전한 상태로 받는다. 제목 뒤에는 본문이 이어진다. */
+export function splitBlockTexts(id: string, before: string, after: string) {
+  const b = get().project?.story?.find((x) => x.id === id);
+  if (!b) return;
+  const tail = makeBlock(b.style === 'chapter' || b.style === 'section' ? 'body' : b.style, after);
+  mutate((p) => mapStory(p, (st) => st.flatMap((x) => (x.id === id ? [{ ...x, text: before }, tail] : [x]))));
+  set({ focus: { id: tail.id, caret: 0 } });
+}

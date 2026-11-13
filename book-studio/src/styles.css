@@ -347,3 +347,20 @@ h2, h3, p { margin: 0; }
 .modal.confirm { width: min(420px, 100%); padding: 24px 24px 18px; gap: 20px; }
 .modal.confirm p { line-height: 1.7; word-break: keep-all; }
 .cover-templates { grid-template-columns: repeat(4, 1fr); row-gap: 22px; }
+
+/* 원고 보기: 서식이 바로 보이는 편집 칸, 장 접기 */
+.ms-edit { cursor: text; overflow: visible; }
+.ms-edit:empty::before { content: attr(data-placeholder); color: var(--ink-3); }
+.ms-text u { text-underline-offset: 3px; }
+.fn-chip { user-select: all; }
+.ms-edit .fn-chip { cursor: pointer; }
+.note-input { flex: 1; min-width: 180px; border: 1px solid var(--accent); border-radius: 5px; padding: 2px 8px; font-size: 12px; background: #fff; }
+.ms-help { display: flex; flex-direction: column; gap: 10px; }
+.ms-side { display: flex; align-items: flex-start; gap: 2px; }
+.ms-side select { min-width: 0; }
+.ms-fold { border: 0; background: transparent; cursor: pointer; color: var(--ink-2); font-size: 13px; padding: 5px 2px; border-radius: 4px; flex: none; }
+.ms-fold:hover { background: var(--accent-soft); color: var(--ink); }
+.style-chapter .ms-fold { margin-top: 18px; }
+.style-chapter .ms-side select { margin-top: 18px; }
+.ms-folded { border: 1px dashed var(--line); background: var(--bg); color: var(--ink-2); border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; margin: 4px 0 8px; }
+.ms-folded:hover { border-color: var(--ink-3); color: var(--ink); }
